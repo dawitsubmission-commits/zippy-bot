@@ -1,0 +1,13 @@
+{
+  "name": "zippy-bot",
+  "main": "index.ts",
+  "compatibility_date": "2025-06-01",
+  "observability": { "enabled": true },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "zippy-db",
+      "database_id": "cd4a32b4-9e86-49d2-8fda-76f73afef12b"
+    }
+  ]
+}
