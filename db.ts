@@ -39,6 +39,17 @@ export const MIGRATIONS: Migration[] = [
       "INSERT INTO menu_items (id, cafeteria_id, name, price_santim, sort_order) VALUES (1, 1, 'ሶሲ ስልስ', 15000, 1), (2, 1, 'ፓስታ በእንቁላል', 15000, 2), (3, 1, 'እንቁላል ስልስ', 15000, 3), (4, 1, 'ምስር ወጥ', 15000, 4), (5, 1, 'ሙሉ ፍርፍር', 13000, 5), (6, 1, 'ግማሽ ፍርፍር', 12000, 6), (7, 1, 'ፓስታ ባትክልት', 12000, 7), (8, 1, 'ቲማቲም ለብለብ', 12000, 8), (9, 1, 'ፓስታ በስጎ', 12000, 9), (10, 1, 'ድንች ወጥ', 12000, 10), (11, 1, 'ሽሮ ፈሰስ', 12000, 11)",
     ],
   },
+  {
+    id: "0003_admin",
+    statements: [
+      // A permanent record of what the admin changed, and when. Rows are only ever added.
+      "CREATE TABLE audit_log (id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, actor_telegram_id INTEGER NOT NULL, action TEXT NOT NULL, target TEXT NOT NULL, details TEXT NOT NULL)",
+      // Remembers what the admin is in the middle of (for example: "typing a new price").
+      "CREATE TABLE admin_state (telegram_user_id INTEGER PRIMARY KEY, data TEXT NOT NULL, updated_at INTEGER NOT NULL)",
+      // No two visible foods in a cafeteria may share the exact same name.
+      "CREATE UNIQUE INDEX uq_menu_item_name ON menu_items (cafeteria_id, name) WHERE archived = 0",
+    ],
+  },
 ];
 
 // Applies any migrations that have not run yet. Safe to run many times.
