@@ -99,13 +99,13 @@ function viewCartButton(portions: number): Button {
   return { text: portions > 0 ? `🛒 View Cart (${portions})` : "🛒 View Cart", data: SHOP_CB.cart };
 }
 
-export function cafeteriaSelectionScreen(cafeterias: CafeteriaView[], cartPortions: number): Screen {
+export function cafeteriaSelectionScreen(cafeterias: CafeteriaView[], cartPortions: number, statusLine?: string): Screen {
   const buttons: Button[][] = cafeterias.map((c) => [
     { text: c.active ? c.name : `${c.name} — Coming Soon`, data: `c:${c.id}` },
   ]);
   if (cartPortions > 0) buttons.push([viewCartButton(cartPortions)]);
   buttons.push([MAIN_MENU]);
-  return { text: "🍱 Choose a Cafeteria", buttons };
+  return { text: statusLine ? `🍱 Choose a Cafeteria\n\n${statusLine}` : "🍱 Choose a Cafeteria", buttons };
 }
 
 export function cafeteriaComingSoonScreen(name: string): Screen {
@@ -120,6 +120,7 @@ export function foodMenuScreen(
   items: MenuItemView[],
   cartPortions: number,
   feePerPortion: number,
+  statusLine?: string,
 ): Screen {
   const buttons: Button[][] = items.map((item) => [
     item.available
@@ -130,7 +131,9 @@ export function foodMenuScreen(
   buttons.push([BACK_TO_CAFETERIAS]);
   buttons.push([MAIN_MENU]);
   return {
-    text: `🍽 ${cafeteria.name}\n\nTap a food to add one portion to your cart.\nDelivery fee: ${formatEtb(feePerPortion)} per portion.`,
+    text:
+      `🍽 ${cafeteria.name}\n\nTap a food to add one portion to your cart.\nDelivery fee: ${formatEtb(feePerPortion)} per portion.` +
+      (statusLine ? `\n\n${statusLine}` : ""),
     buttons,
   };
 }
@@ -142,7 +145,14 @@ export function emptyCartScreen(): Screen {
   };
 }
 
-export function cartScreen(cafeteria: { id: number; name: string }, lines: CartLine[], feePerPortion: number): Screen {
+export type CartOptions = { statusLine?: string; orderingOpen?: boolean };
+
+export function cartScreen(
+  cafeteria: { id: number; name: string },
+  lines: CartLine[],
+  feePerPortion: number,
+  options: CartOptions = {},
+): Screen {
   if (lines.length === 0) return emptyCartScreen();
   const pricing = priceCart(lines, feePerPortion);
   const hasUnavailable = lines.some((l) => !l.available);
@@ -168,6 +178,7 @@ export function cartScreen(cafeteria: { id: number; name: string }, lines: CartL
     out.push("None of the items in your cart are available right now.");
   }
   if (hasUnavailable) out.push("", "Remove the unavailable items to continue.");
+  if (options.statusLine) out.push("", options.statusLine);
 
   const buttons: Button[][] = [];
   for (const line of lines) {
@@ -182,7 +193,11 @@ export function cartScreen(cafeteria: { id: number; name: string }, lines: CartL
       buttons.push([{ text: `🗑 Remove ${line.name}`, data: `qx:${line.itemId}` }]);
     }
   }
-  if (hasAvailable && !hasUnavailable) buttons.push([{ text: "✅ Checkout", data: SHOP_CB.checkout }]);
+  if (hasAvailable && !hasUnavailable) {
+    // Browsing and editing the cart always work; only checkout is switched off while ordering is closed.
+    const checkoutText = options.orderingOpen === false ? "🔒 Checkout (closed)" : "✅ Checkout";
+    buttons.push([{ text: checkoutText, data: SHOP_CB.checkout }]);
+  }
   buttons.push([{ text: "🍽 Continue Shopping", data: `c:${cafeteria.id}` }]);
   buttons.push([BACK_TO_CAFETERIAS]);
   buttons.push([MAIN_MENU]);

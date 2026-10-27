@@ -50,6 +50,23 @@ export const MIGRATIONS: Migration[] = [
       "CREATE UNIQUE INDEX uq_menu_item_name ON menu_items (cafeteria_id, name) WHERE archived = 0",
     ],
   },
+  {
+    id: "0004_schedule",
+    statements: [
+      // Ordering windows, as normal minutes of the day (480 = 08:00). The close moment is NOT included.
+      "CREATE TABLE schedule_windows (id INTEGER PRIMARY KEY, name TEXT NOT NULL, open_minute INTEGER NOT NULL CHECK (open_minute >= 0 AND open_minute < 1440), close_minute INTEGER NOT NULL CHECK (close_minute > open_minute AND close_minute <= 1440), sort_order INTEGER NOT NULL DEFAULT 0)",
+      // PROVISIONAL (owner to confirm): Lunch 2:00-5:30 and Dinner 10:00-11:45 on the Ethiopian clock.
+      "INSERT INTO schedule_windows (id, name, open_minute, close_minute, sort_order) VALUES (1, 'Lunch', 480, 690, 1), (2, 'Dinner', 960, 1065, 2)",
+      // 1 = Monday ... 7 = Sunday. Weekends are closed by default.
+      "INSERT INTO settings (key, value) VALUES ('open_weekdays', '1,2,3,4,5')",
+      // Whether admin screens also show the normal 24-hour time beside the Ethiopian clock.
+      "INSERT INTO settings (key, value) VALUES ('admin_show_international', '1')",
+      // Special closures and holidays (a date such as 2026-11-12 in Addis Ababa).
+      "CREATE TABLE closures (date TEXT PRIMARY KEY, reason TEXT NOT NULL DEFAULT '')",
+      // "Open now" / "Close now" with an end time. At most one row.
+      "CREATE TABLE schedule_override (id INTEGER PRIMARY KEY CHECK (id = 1), mode TEXT NOT NULL CHECK (mode IN ('open', 'closed')), until INTEGER NOT NULL, set_by INTEGER NOT NULL, set_at INTEGER NOT NULL)",
+    ],
+  },
 ];
 
 // Applies any migrations that have not run yet. Safe to run many times.

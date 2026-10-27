@@ -14,6 +14,7 @@ import {
   type MenuItemView,
 } from "./cart";
 import type { Db } from "./db";
+import { describeStatus, getOrderingStatus } from "./schedule";
 import type { Screen } from "./screens";
 
 type Row = Record<string, unknown>;
@@ -189,30 +190,40 @@ export async function decreaseInCart(db: Db, userId: number, itemId: number, now
 export type ShopResult = { screen?: Screen; toast?: string; alert?: boolean };
 
 async function selectionScreen(db: Db, userId: number, now: number): Promise<Screen> {
-  const [cafeterias, cart] = await Promise.all([listCafeterias(db), loadCart(db, userId, now)]);
-  return cafeteriaSelectionScreen(cafeterias, cart.portions);
+  const [cafeterias, cart, status] = await Promise.all([listCafeterias(db), loadCart(db, userId, now), getOrderingStatus(db, now)]);
+  return cafeteriaSelectionScreen(cafeterias, cart.portions, describeStatus(status));
 }
 
 async function menuScreen(db: Db, userId: number, cafeteriaId: number, now: number): Promise<Screen | null> {
   const cafeteria = await getCafeteria(db, cafeteriaId);
   if (!cafeteria) return null;
   if (!cafeteria.active) return cafeteriaComingSoonScreen(cafeteria.name);
-  const [items, cart, fee] = await Promise.all([
+  const [items, cart, fee, status] = await Promise.all([
     listMenu(db, cafeteria.id),
     loadCart(db, userId, now),
     getFeePerPortion(db),
+    getOrderingStatus(db, now),
   ]);
-  return foodMenuScreen(cafeteria, items, cart.portions, fee);
+  return foodMenuScreen(cafeteria, items, cart.portions, fee, describeStatus(status));
 }
 
-async function currentCartScreen(db: Db, userId: number, now: number): Promise<{ screen: Screen; hasUnavailable: boolean }> {
+async function currentCartScreen(
+  db: Db,
+  userId: number,
+  now: number,
+): Promise<{ screen: Screen; hasUnavailable: boolean; orderingOpen: boolean; statusLine: string }> {
+  const status = await getOrderingStatus(db, now);
+  const statusLine = describeStatus(status);
   const cart = await loadCart(db, userId, now);
-  if (cart.cafeteriaId === null || cart.lines.length === 0) return { screen: emptyCartScreen(), hasUnavailable: false };
+  const empty = { screen: emptyCartScreen(), hasUnavailable: false, orderingOpen: status.open, statusLine };
+  if (cart.cafeteriaId === null || cart.lines.length === 0) return empty;
   const [cafeteria, fee] = await Promise.all([getCafeteria(db, cart.cafeteriaId), getFeePerPortion(db)]);
-  if (!cafeteria) return { screen: emptyCartScreen(), hasUnavailable: false };
+  if (!cafeteria) return empty;
   return {
-    screen: cartScreen(cafeteria, cart.lines, fee),
+    screen: cartScreen(cafeteria, cart.lines, fee, { statusLine, orderingOpen: status.open }),
     hasUnavailable: cart.lines.some((l) => !l.available),
+    orderingOpen: status.open,
+    statusLine,
   };
 }
 
@@ -273,14 +284,14 @@ export async function handleShop(db: Db, userId: number, data: string, now: numb
       return { screen: (await currentCartScreen(db, userId, now)).screen };
     }
     case "checkout": {
-      const { screen, hasUnavailable } = await currentCartScreen(db, userId, now);
-      return {
-        screen,
-        toast: hasUnavailable
+      const { screen, hasUnavailable, orderingOpen, statusLine } = await currentCartScreen(db, userId, now);
+      // Checks happen here on the server: a closed schedule always wins over whatever button was tapped.
+      const toast = !orderingOpen
+        ? `${statusLine}\nYour cart is saved.`
+        : hasUnavailable
           ? "Remove the unavailable items first."
-          : "Checkout isn't open yet. Your cart is saved.",
-        alert: true,
-      };
+          : "Checkout isn't open yet. Your cart is saved.";
+      return { screen, toast, alert: true };
     }
   }
 }

@@ -5,6 +5,7 @@
 import { formatEtb } from "./cart";
 import type { Db } from "./db";
 import { CB, adminPanel, type Button, type Screen } from "./screens";
+import { hoursScreen } from "./schedule";
 import { getCafeteria, getFeePerPortion, listCafeterias, listMenu } from "./store";
 
 type Row = Record<string, unknown>;
@@ -353,7 +354,7 @@ async function applyAction(db: Db, adminId: number, action: PendingAction, now: 
 
 export type AdminResult = { screen?: Screen; toast?: string; alert?: boolean };
 
-const SIMPLE = new Set(["a:menu", "a:cafes", "a:settings", "a:fee", "a:cy", "a:cn"]);
+const SIMPLE = new Set(["a:menu", "a:cafes", "a:settings", "a:fee", "a:hours", "a:cy", "a:cn"]);
 
 // Returns null for admin buttons this file does not handle (the placeholder screens).
 export async function handleAdmin(db: Db, adminId: number, data: string, now: number): Promise<AdminResult | null> {
@@ -363,6 +364,10 @@ export async function handleAdmin(db: Db, adminId: number, data: string, now: nu
   if (data === "a:menu") {
     await clearState(db, adminId);
     return { screen: menuPickerScreen(await listCafeterias(db)) };
+  }
+  if (data === "a:hours") {
+    await clearState(db, adminId);
+    return { screen: await hoursScreen(db, now) };
   }
   if (data === "a:cafes") {
     await clearState(db, adminId);
