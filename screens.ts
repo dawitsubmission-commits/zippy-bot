@@ -89,11 +89,6 @@ export function routeCallback(data: string, isAdminUser: boolean): RouteResult {
     return { kind: "screen", screen: adminStub(data.slice(2)) };
   }
   switch (data) {
-    case CB.cafe:
-      return {
-        kind: "screen",
-        screen: simple("🍱 Cafeteria Delivery\n\nCafeteria ordering isn't open yet. We're still setting it up."),
-      };
     case CB.restaurant:
       return { kind: "screen", screen: simple("🍔 Restaurant delivery is coming soon!\n\nStay tuned for updates.") };
     case CB.package:

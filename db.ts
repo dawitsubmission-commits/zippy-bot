@@ -5,6 +5,7 @@ export interface Stmt {
   bind(...values: unknown[]): Stmt;
   run(): Promise<{ meta?: { changes?: number } }>;
   first<T = Record<string, unknown>>(): Promise<T | null>;
+  all<T = Record<string, unknown>>(): Promise<{ results: T[] }>;
 }
 export interface Db {
   prepare(sql: string): Stmt;
@@ -20,6 +21,22 @@ export const MIGRATIONS: Migration[] = [
     statements: [
       // Remembers which Telegram updates we already handled, so retries never repeat work.
       "CREATE TABLE IF NOT EXISTS processed_updates (update_id INTEGER PRIMARY KEY, received_at INTEGER NOT NULL)",
+    ],
+  },
+  {
+    id: "0002_shop",
+    statements: [
+      "CREATE TABLE cafeterias (id INTEGER PRIMARY KEY, name TEXT NOT NULL, active INTEGER NOT NULL DEFAULT 0 CHECK (active IN (0, 1)), sort_order INTEGER NOT NULL DEFAULT 0)",
+      "CREATE TABLE menu_items (id INTEGER PRIMARY KEY, cafeteria_id INTEGER NOT NULL REFERENCES cafeterias(id), name TEXT NOT NULL, price_santim INTEGER NOT NULL CHECK (price_santim > 0), available INTEGER NOT NULL DEFAULT 1 CHECK (available IN (0, 1)), archived INTEGER NOT NULL DEFAULT 0 CHECK (archived IN (0, 1)), sort_order INTEGER NOT NULL DEFAULT 0)",
+      "CREATE INDEX idx_menu_items_cafeteria ON menu_items (cafeteria_id)",
+      "CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)",
+      // 1000 santim = ETB 10 per portion. Money is stored as whole santim (100 santim = 1 ETB).
+      "INSERT INTO settings (key, value) VALUES ('delivery_fee_per_portion_santim', '1000')",
+      "CREATE TABLE carts (telegram_user_id INTEGER PRIMARY KEY, cafeteria_id INTEGER NOT NULL REFERENCES cafeterias(id), updated_at INTEGER NOT NULL)",
+      "CREATE TABLE cart_items (telegram_user_id INTEGER NOT NULL, menu_item_id INTEGER NOT NULL REFERENCES menu_items(id), quantity INTEGER NOT NULL CHECK (quantity BETWEEN 1 AND 99), PRIMARY KEY (telegram_user_id, menu_item_id))",
+      "INSERT INTO cafeterias (id, name, active, sort_order) VALUES (1, 'ዘሩ ምግብ ቤት', 1, 1), (2, 'ኤማንዳ', 0, 2)",
+      // Exact names and prices supplied by the owner (150 ETB = 15000 santim).
+      "INSERT INTO menu_items (id, cafeteria_id, name, price_santim, sort_order) VALUES (1, 1, 'ሶሲ ስልስ', 15000, 1), (2, 1, 'ፓስታ በእንቁላል', 15000, 2), (3, 1, 'እንቁላል ስልስ', 15000, 3), (4, 1, 'ምስር ወጥ', 15000, 4), (5, 1, 'ሙሉ ፍርፍር', 13000, 5), (6, 1, 'ግማሽ ፍርፍር', 12000, 6), (7, 1, 'ፓስታ ባትክልት', 12000, 7), (8, 1, 'ቲማቲም ለብለብ', 12000, 8), (9, 1, 'ፓስታ በስጎ', 12000, 9), (10, 1, 'ድንች ወጥ', 12000, 10), (11, 1, 'ሽሮ ፈሰስ', 12000, 11)",
     ],
   },
 ];
