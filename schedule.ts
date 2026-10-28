@@ -152,9 +152,20 @@ export async function hoursScreen(db: Db, now: number): Promise<Screen> {
       `Temporary override: ${override}`,
       "",
       `Right now: ${describeStatus(status)}`,
-      "",
-      "Editing the hours, closures and Open Now / Close Now comes in the next step.",
     ].join("\n"),
-    buttons: [[{ text: "⬅ Admin Panel", data: CB.adminHome }]],
+    buttons: [
+      ...schedule.windows.map((w) => [{ text: `✏️ Edit ${w.name} hours`, data: `a:hw:${w.id}` }]),
+      [
+        { text: "📅 Open days", data: "a:hd" },
+        { text: "🚫 Special closures", data: "a:hc" },
+      ],
+      [
+        { text: "🟢 Open Now", data: "a:on" },
+        { text: "🔴 Close Now", data: "a:cl" },
+      ],
+      ...(schedule.override ? [[{ text: "↩️ Resume Normal Schedule", data: "a:rs" }]] : []),
+      [{ text: showIntl ? "🌐 Hide normal-clock times" : "🌐 Show normal-clock times", data: "a:hi" }],
+      [{ text: "⬅ Admin Panel", data: CB.adminHome }],
+    ],
   };
 }

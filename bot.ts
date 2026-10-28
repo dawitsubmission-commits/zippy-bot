@@ -1,6 +1,7 @@
 import { Bot, InlineKeyboard } from "grammy";
 import type { UserFromGetMe } from "grammy/types";
-import { clearState, handleAdmin, handleAdminText } from "./admin";
+import { handleAdmin, handleAdminText } from "./admin";
+import { clearState } from "./admin-state";
 import { isAdmin } from "./auth";
 import { claimUpdate, releaseUpdate, runMigrations, type Db } from "./db";
 import { adminPanel, mainMenu, routeCallback, type Screen } from "./screens";

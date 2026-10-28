@@ -3,9 +3,13 @@
 // Every change is confirmed by the admin and written to the audit log in the same all-or-nothing step.
 
 import { formatEtb } from "./cart";
+import { applyHoursAction, handleHoursCallback, handleHoursText, isHoursAction, isHoursStep } from "./admin-hours";
+import {
+  ADMIN_PANEL_BUTTON, AUDIT_SQL, CANCEL, clearState, confirmScreen, getState, promptScreen, setState,
+  type AdminState, type BasicAction, type Outcome,
+} from "./admin-state";
 import type { Db } from "./db";
-import { CB, adminPanel, type Button, type Screen } from "./screens";
-import { hoursScreen } from "./schedule";
+import { adminPanel, type Screen } from "./screens";
 import { getCafeteria, getFeePerPortion, listCafeterias, listMenu } from "./store";
 
 type Row = Record<string, unknown>;
@@ -35,59 +39,7 @@ export function validateFoodName(input: string): { ok: true; name: string } | { 
   return { ok: true, name };
 }
 
-// ---------- what the admin is in the middle of ----------
-
-type PendingAction =
-  | { type: "price"; itemId: number; name: string; oldSantim: number; newSantim: number }
-  | { type: "name"; itemId: number; oldName: string; newName: string }
-  | { type: "add"; cafeteriaId: number; name: string; priceSantim: number }
-  | { type: "archive"; itemId: number; name: string }
-  | { type: "fee"; oldSantim: number; newSantim: number }
-  | { type: "cafeteria"; cafeteriaId: number; name: string; active: boolean };
-
-export type AdminState =
-  | { step: "price"; itemId: number }
-  | { step: "name"; itemId: number }
-  | { step: "new_name"; cafeteriaId: number }
-  | { step: "new_price"; cafeteriaId: number; name: string }
-  | { step: "fee" }
-  | { step: "confirm"; action: PendingAction };
-
-const STEPS = ["price", "name", "new_name", "new_price", "fee", "confirm"];
-
-export async function getState(db: Db, adminId: number, now: number): Promise<AdminState | null> {
-  const row = await db
-    .prepare("SELECT data, updated_at FROM admin_state WHERE telegram_user_id = ?")
-    .bind(adminId)
-    .first<Row>();
-  if (!row) return null;
-  if (Number(row.updated_at) < now - ADMIN_STATE_SECONDS) {
-    await clearState(db, adminId);
-    return null;
-  }
-  try {
-    const state = JSON.parse(String(row.data)) as AdminState;
-    if (state && typeof state === "object" && STEPS.includes(state.step)) return state;
-  } catch {
-    // fall through
-  }
-  await clearState(db, adminId);
-  return null;
-}
-
-async function setState(db: Db, adminId: number, state: AdminState, now: number): Promise<void> {
-  await db
-    .prepare(
-      "INSERT INTO admin_state (telegram_user_id, data, updated_at) VALUES (?, ?, ?) " +
-        "ON CONFLICT (telegram_user_id) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at",
-    )
-    .bind(adminId, JSON.stringify(state), now)
-    .run();
-}
-
-export async function clearState(db: Db, adminId: number): Promise<void> {
-  await db.prepare("DELETE FROM admin_state WHERE telegram_user_id = ?").bind(adminId).run();
-}
+export { getState, type AdminState };
 
 // ---------- reading ----------
 
@@ -119,12 +71,6 @@ async function availableCount(db: Db, cafeteriaId: number): Promise<number> {
 
 // ---------- screens ----------
 
-const ADMIN_PANEL_BUTTON: Button = { text: "⬅ Admin Panel", data: CB.adminHome };
-const CANCEL: Button = { text: "✖ Cancel", data: "a:cn" };
-const CONFIRM_ROW: Button[] = [
-  { text: "✅ Confirm", data: "a:cy" },
-  { text: "✖ Cancel", data: "a:cn" },
-];
 
 function menuPickerScreen(cafeterias: { id: number; name: string; active: boolean }[]): Screen {
   return {
@@ -170,14 +116,6 @@ function itemScreen(item: Item): Screen {
   };
 }
 
-function promptScreen(text: string): Screen {
-  return { text, buttons: [[CANCEL]] };
-}
-
-function confirmScreen(text: string): Screen {
-  return { text, buttons: [CONFIRM_ROW] };
-}
-
 function cafeteriasScreen(cafeterias: { id: number; name: string; active: boolean }[]): Screen {
   return {
     text: "🍽️ Manage Cafeterias\n\nTap a cafeteria to open or close it.",
@@ -217,11 +155,7 @@ async function feePromptScreen(db: Db): Promise<Screen> {
 // Each change is one all-or-nothing step: the audit row and the update both only happen if the
 // value is still what the admin saw. If someone changed it meanwhile, neither happens.
 
-const AUDIT_SQL = "INSERT INTO audit_log (at, actor_telegram_id, action, target, details) ";
-
-type Outcome = { ok: boolean; message: string; screen: Screen };
-
-async function applyAction(db: Db, adminId: number, action: PendingAction, now: number): Promise<Outcome> {
+async function applyAction(db: Db, adminId: number, action: BasicAction, now: number): Promise<Outcome> {
   const back = adminPanel();
   switch (action.type) {
     case "price": {
@@ -354,20 +288,20 @@ async function applyAction(db: Db, adminId: number, action: PendingAction, now: 
 
 export type AdminResult = { screen?: Screen; toast?: string; alert?: boolean };
 
-const SIMPLE = new Set(["a:menu", "a:cafes", "a:settings", "a:fee", "a:hours", "a:cy", "a:cn"]);
+const SIMPLE = new Set(["a:menu", "a:cafes", "a:settings", "a:fee", "a:cy", "a:cn"]);
 
 // Returns null for admin buttons this file does not handle (the placeholder screens).
 export async function handleAdmin(db: Db, adminId: number, data: string, now: number): Promise<AdminResult | null> {
+  // Opening-hours buttons live in admin-hours.ts.
+  const hoursResult = await handleHoursCallback(db, adminId, data, now);
+  if (hoursResult) return hoursResult;
+
   const m = /^a:(mc|mi|en|ep|tg|ar|af|cf|cs):(\d{1,9})$/.exec(data);
   if (!m && !SIMPLE.has(data)) return null;
 
   if (data === "a:menu") {
     await clearState(db, adminId);
     return { screen: menuPickerScreen(await listCafeterias(db)) };
-  }
-  if (data === "a:hours") {
-    await clearState(db, adminId);
-    return { screen: await hoursScreen(db, now) };
   }
   if (data === "a:cafes") {
     await clearState(db, adminId);
@@ -391,7 +325,9 @@ export async function handleAdmin(db: Db, adminId: number, data: string, now: nu
       return { screen: adminPanel(), toast: "Nothing to confirm." };
     }
     await clearState(db, adminId); // clear first, so a double tap cannot apply it twice
-    const outcome = await applyAction(db, adminId, state.action, now);
+    const outcome = isHoursAction(state.action)
+      ? await applyHoursAction(db, adminId, state.action, now)
+      : await applyAction(db, adminId, state.action, now);
     return { screen: outcome.screen, toast: outcome.message, alert: !outcome.ok };
   }
 
@@ -485,6 +421,7 @@ export async function handleAdminText(db: Db, adminId: number, text: string, now
   if (state.step === "confirm") {
     return { text: "Please tap Confirm or Cancel above, or send /cancel.", buttons: [] };
   }
+  if (isHoursStep(state.step)) return handleHoursText(db, adminId, state, text, now);
 
   if (state.step === "price") {
     const item = await getItem(db, state.itemId);
