@@ -89,6 +89,20 @@ export const MIGRATIONS: Migration[] = [
       "CREATE UNIQUE INDEX uq_session_open ON checkout_sessions (customer_id) WHERE status IN ('awaiting_payment', 'under_verification')",
     ],
   },
+  {
+    id: "0007_orders",
+    statements: [
+      // A confirmed order exists only after the admin has verified the payment. The order number is ZP-<id>,
+      // and the id can never repeat (AUTOINCREMENT), so two orders can never share a number.
+      "CREATE TABLE orders (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id INTEGER NOT NULL UNIQUE REFERENCES checkout_sessions(id), customer_id INTEGER NOT NULL, cafeteria_id INTEGER NOT NULL REFERENCES cafeterias(id), status TEXT NOT NULL CHECK (status IN ('confirmed', 'preparing', 'ready', 'out_for_delivery', 'completed', 'cancelled')), payment_status TEXT NOT NULL CHECK (payment_status IN ('verified', 'refund_pending', 'refunded')), method TEXT NOT NULL, subtotal_santim INTEGER NOT NULL, fee_santim INTEGER NOT NULL, total_santim INTEGER NOT NULL, portions INTEGER NOT NULL, items_json TEXT NOT NULL, customer_name TEXT NOT NULL, customer_phone TEXT, location_json TEXT NOT NULL, bank_reference TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)",
+      "CREATE INDEX idx_orders_customer ON orders (customer_id, id)",
+      "CREATE INDEX idx_orders_status ON orders (status, id)",
+      // Every change of an order's status: from, to, who and when.
+      "CREATE TABLE order_status_history (id INTEGER PRIMARY KEY AUTOINCREMENT, order_id INTEGER NOT NULL REFERENCES orders(id), from_status TEXT, to_status TEXT NOT NULL, actor_telegram_id INTEGER NOT NULL, at INTEGER NOT NULL)",
+      // Who verified or rejected which payment, and when.
+      "CREATE TABLE payment_events (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id INTEGER NOT NULL REFERENCES checkout_sessions(id), event TEXT NOT NULL CHECK (event IN ('verified', 'rejected')), actor_telegram_id INTEGER NOT NULL, reason TEXT NOT NULL DEFAULT '', at INTEGER NOT NULL)",
+    ],
+  },
 ];
 
 // Applies any migrations that have not run yet. Safe to run many times.

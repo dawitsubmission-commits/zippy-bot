@@ -1,6 +1,6 @@
 // ZIPPY screens: plain data only (no Telegram library), so the logic is easy to test.
 
-export type Button = { text: string; data: string };
+export type Button = { text: string; data: string; url?: string };
 export type Screen = { text: string; buttons: Button[][] };
 
 export const TAGLINE = "One Tap. That's It.";

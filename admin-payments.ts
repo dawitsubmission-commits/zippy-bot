@@ -59,7 +59,7 @@ async function instructionsScreen(db: Db): Promise<Screen> {
   };
 }
 
-async function overviewScreen(db: Db): Promise<Screen> {
+export async function overviewScreen(db: Db): Promise<Screen> {
   const { results } = await db
     .prepare("SELECT method, COUNT(*) AS n FROM checkout_sessions WHERE status = 'under_verification' GROUP BY method")
     .all<Row>();
@@ -67,7 +67,7 @@ async function overviewScreen(db: Db): Promise<Screen> {
   return {
     text:
       `💳 Payment Verification\n\nWaiting to be checked:\nCBE: ${count("cbe")}\nCBE Birr: ${count("cbe_birr")}\n\n` +
-      "Confirming and rejecting payments comes in the next step.",
+      "Open one, check your REAL account, then confirm or reject it.",
     buttons: [
       [{ text: `📋 CBE Payments (${count("cbe")})`, data: "a:pl:cbe" }],
       [{ text: `📋 CBE Birr Payments (${count("cbe_birr")})`, data: "a:pl:cbb" }],
@@ -116,7 +116,14 @@ async function detailScreen(db: Db, id: number): Promise<Screen | null> {
   ]
     .filter((line, i, all) => line !== "" || (i > 0 && all[i - 1] !== ""))
     .join("\n");
-  return { text, buttons: [[{ text: "⬅ Back to the list", data: `a:pl:${METHODS[s.method].code}` }]] };
+  const buttons: Button[][] = [];
+  if (s.status === "under_verification") {
+    buttons.push([{ text: "✅ Confirm payment", data: `a:pv:${s.id}` }]);
+    buttons.push([{ text: "❌ Reject payment", data: `a:px:${s.id}` }]);
+    buttons.push([{ text: "📞 Contact customer", data: "x:noop", url: `tg://user?id=${s.customerId}` }]);
+  }
+  buttons.push([{ text: "⬅ Back to the list", data: `a:pl:${METHODS[s.method].code}` }]);
+  return { text, buttons };
 }
 
 // ---------- buttons ----------

@@ -2,6 +2,7 @@ import { Bot, InlineKeyboard, Keyboard } from "grammy";
 import type { UserFromGetMe } from "grammy/types";
 import { handleAdmin, handleAdminText } from "./admin";
 import { clearState, getState as getAdminState } from "./admin-state";
+import { handleCustomerOrders } from "./orders";
 import { handlePaymentCallback, handlePaymentPhoto, handlePaymentText } from "./payment";
 import { handleCheckoutCallback, handleCheckoutText, handleContact, startCheckout, type FlowResult } from "./checkout";
 import { isAdmin } from "./auth";
@@ -19,7 +20,10 @@ export type BotDeps = {
 function toKeyboard(screen: Screen): InlineKeyboard {
   const keyboard = new InlineKeyboard();
   screen.buttons.forEach((row, index) => {
-    for (const button of row) keyboard.text(button.text, button.data);
+    for (const button of row) {
+      if (button.url) keyboard.url(button.text, button.url);
+      else keyboard.text(button.text, button.data);
+    }
     if (index < screen.buttons.length - 1) keyboard.row();
   });
   return keyboard;
@@ -35,13 +39,14 @@ function isNotModified(err: unknown): boolean {
   return typeof description === "string" && description.includes("message is not modified");
 }
 
-type Reply = { screen?: Screen; toast?: string; alert?: boolean };
+type Reply = { screen?: Screen; toast?: string; alert?: boolean; notify?: { chatId: number; text: string }[] };
 
 // Answers the button tap (toast or alert) and shows the new screen by editing the message.
 async function respond(
   ctx: {
     answerCallbackQuery: (o?: { text?: string; show_alert?: boolean }) => Promise<unknown>;
     editMessageText: (text: string, other?: { reply_markup?: InlineKeyboard }) => Promise<unknown>;
+    api: { sendMessage: (chatId: number, text: string) => Promise<unknown> };
   },
   r: Reply,
 ): Promise<void> {
@@ -51,6 +56,14 @@ async function respond(
       await ctx.editMessageText(r.screen.text, { reply_markup: toKeyboard(r.screen) });
     } catch (err) {
       if (!isNotModified(err)) throw err;
+    }
+  }
+  // Tell the customer (for example: payment confirmed, order on its way). A failure here is only logged.
+  for (const n of r.notify ?? []) {
+    try {
+      await ctx.api.sendMessage(n.chatId, n.text);
+    } catch (err) {
+      console.error("zippy customer notice error:", safeError(err));
     }
   }
 }
@@ -178,6 +191,11 @@ export function createBot(deps: BotDeps): Bot {
       }
       if (shop) {
         await respond(ctx, shop);
+        return;
+      }
+      const orders = await handleCustomerOrders(deps.db, ctx.from.id, data);
+      if (orders) {
+        await respond(ctx, orders);
         return;
       }
     } catch (err) {

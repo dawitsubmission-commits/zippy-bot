@@ -4,10 +4,11 @@
 
 import { formatEtb } from "./cart";
 import { applyHoursAction, handleHoursCallback, handleHoursText, isHoursAction, isHoursStep } from "./admin-hours";
+import { applyOrdersAction, handleOrdersCallback, isOrdersAction } from "./admin-orders";
 import { applyPaymentsAction, handlePaymentsCallback, handlePaymentsText, isPaymentsAction, isPaymentsStep } from "./admin-payments";
 import {
   ADMIN_PANEL_BUTTON, AUDIT_SQL, CANCEL, clearState, confirmScreen, getState, promptScreen, setState,
-  type AdminState, type BasicAction, type Outcome,
+  type AdminState, type BasicAction, type Notify, type Outcome,
 } from "./admin-state";
 import type { Db } from "./db";
 import { adminPanel, type Screen } from "./screens";
@@ -300,7 +301,7 @@ async function applyAction(db: Db, adminId: number, action: BasicAction, now: nu
 
 // ---------- the handler for admin buttons ----------
 
-export type AdminResult = { screen?: Screen; toast?: string; alert?: boolean };
+export type AdminResult = { screen?: Screen; toast?: string; alert?: boolean; notify?: Notify[] };
 
 const SIMPLE = new Set(["a:menu", "a:cafes", "a:settings", "a:fee", "a:ph", "a:cy", "a:cn"]);
 
@@ -312,6 +313,9 @@ export async function handleAdmin(db: Db, adminId: number, data: string, now: nu
   // Payment instructions and the payment list live in admin-payments.ts.
   const paymentsResult = await handlePaymentsCallback(db, adminId, data, now);
   if (paymentsResult) return paymentsResult;
+  // Confirming payments and managing orders live in admin-orders.ts.
+  const ordersResult = await handleOrdersCallback(db, adminId, data, now);
+  if (ordersResult) return ordersResult;
 
   const m = /^a:(mc|mi|en|ep|tg|ar|af|cf|cs):(\d{1,9})$/.exec(data);
   if (!m && !SIMPLE.has(data)) return null;
@@ -360,8 +364,10 @@ export async function handleAdmin(db: Db, adminId: number, data: string, now: nu
       ? await applyHoursAction(db, adminId, state.action, now)
       : isPaymentsAction(state.action)
         ? await applyPaymentsAction(db, adminId, state.action, now)
-        : await applyAction(db, adminId, state.action, now);
-    return { screen: outcome.screen, toast: outcome.message, alert: !outcome.ok };
+        : isOrdersAction(state.action)
+          ? await applyOrdersAction(db, adminId, state.action, now)
+          : await applyAction(db, adminId, state.action, now);
+    return { screen: outcome.screen, toast: outcome.message, alert: !outcome.ok, notify: outcome.notify };
   }
 
   const kind = m![1];

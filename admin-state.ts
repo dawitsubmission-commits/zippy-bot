@@ -31,7 +31,13 @@ export type PaymentAction =
   | { type: "pay_instr"; method: "cbe" | "cbe_birr"; text: string }
   | { type: "pay_instr_clear"; method: "cbe" | "cbe_birr" };
 
-export type PendingAction = BasicAction | HoursAction | PaymentAction;
+// Verifying payments and moving orders along (see admin-orders.ts).
+export type OrderAction =
+  | { type: "pay_verify"; sessionId: number }
+  | { type: "pay_reject"; sessionId: number; reason: string }
+  | { type: "order_status"; orderId: number; from: string; to: string };
+
+export type PendingAction = BasicAction | HoursAction | PaymentAction | OrderAction;
 
 export type AdminState =
   | { step: "price"; itemId: number }
@@ -105,4 +111,7 @@ export function confirmScreen(text: string): Screen {
 
 export const AUDIT_SQL = "INSERT INTO audit_log (at, actor_telegram_id, action, target, details) ";
 
-export type Outcome = { ok: boolean; message: string; screen: Screen };
+// A message the bot sends to a customer after an admin action (the customer's chat id is their Telegram id).
+export type Notify = { chatId: number; text: string };
+
+export type Outcome = { ok: boolean; message: string; screen: Screen; notify?: Notify[] };
