@@ -1,7 +1,8 @@
-import { Bot, InlineKeyboard } from "grammy";
+import { Bot, InlineKeyboard, Keyboard } from "grammy";
 import type { UserFromGetMe } from "grammy/types";
 import { handleAdmin, handleAdminText } from "./admin";
-import { clearState } from "./admin-state";
+import { clearState, getState as getAdminState } from "./admin-state";
+import { handleCheckoutCallback, handleCheckoutText, handleContact, startCheckout, type FlowResult } from "./checkout";
 import { isAdmin } from "./auth";
 import { claimUpdate, releaseUpdate, runMigrations, type Db } from "./db";
 import { adminPanel, mainMenu, routeCallback, type Screen } from "./screens";
@@ -50,6 +51,21 @@ async function respond(
     } catch (err) {
       if (!isNotModified(err)) throw err;
     }
+  }
+}
+
+type Sender = {
+  reply: (text: string, other?: { reply_markup?: InlineKeyboard | Keyboard | { remove_keyboard: true } }) => Promise<unknown>;
+};
+
+// Sends a checkout step as a new message. When a phone number is needed, Telegram's share button is attached.
+async function sendFlow(ctx: Sender, r: FlowResult): Promise<void> {
+  if (r.thanks) await ctx.reply(r.thanks, { reply_markup: { remove_keyboard: true } });
+  if (!r.screen) return;
+  if (r.askContact) {
+    await ctx.reply(r.screen.text, { reply_markup: new Keyboard().requestContact("📱 Share my phone number").oneTime().resized() });
+  } else {
+    await ctx.reply(r.screen.text, r.screen.buttons.length > 0 ? { reply_markup: toKeyboard(r.screen) } : undefined);
   }
 }
 
@@ -135,17 +151,37 @@ export function createBot(deps: BotDeps): Bot {
       }
     }
 
-    // Cafeteria, menu and cart buttons (they need the database).
-    let shop: ShopResult | null;
+    // Checkout steps (name, phone, location, review), then cafeteria, menu and cart buttons.
+    const user = { id: ctx.from.id, firstName: ctx.from.first_name };
     try {
-      shop = await handleShop(deps.db, ctx.from.id, data, now);
+      const flow = await handleCheckoutCallback(deps.db, user, data, now);
+      if (flow) {
+        if (flow.askContact) {
+          await ctx.answerCallbackQuery(flow.toast ? { text: flow.toast, show_alert: flow.alert === true } : undefined);
+          await sendFlow(ctx, flow);
+        } else {
+          await respond(ctx, flow);
+        }
+        return;
+      }
+      const shop = await handleShop(deps.db, ctx.from.id, data, now);
+      if (shop?.next === "checkout") {
+        const started = await startCheckout(deps.db, user, now);
+        if (started.askContact) {
+          await ctx.answerCallbackQuery();
+          await sendFlow(ctx, started);
+        } else {
+          await respond(ctx, started);
+        }
+        return;
+      }
+      if (shop) {
+        await respond(ctx, shop);
+        return;
+      }
     } catch (err) {
       console.error("zippy shop error:", safeError(err));
       await ctx.answerCallbackQuery({ text: "Something went wrong. Please try again." });
-      return;
-    }
-    if (shop) {
-      await respond(ctx, shop);
       return;
     }
 
@@ -174,6 +210,22 @@ export function createBot(deps: BotDeps): Bot {
   // Everyone else just gets the hint.
   bot.on("message:text", async (ctx) => {
     const userId = ctx.from?.id;
+    const nowSeconds = Math.floor(Date.now() / 1000);
+    const adminBusy =
+      userId !== undefined && isAdmin(userId, deps.adminIds) && (await getAdminState(deps.db, userId, nowSeconds)) !== null;
+    if (userId !== undefined && !adminBusy) {
+      try {
+        const flow = await handleCheckoutText(deps.db, { id: userId, firstName: ctx.from?.first_name }, ctx.message.text, nowSeconds);
+        if (flow) {
+          await sendFlow(ctx, flow);
+          return;
+        }
+      } catch (err) {
+        console.error("zippy checkout text error:", safeError(err));
+        await ctx.reply("Something went wrong. Please try again.");
+        return;
+      }
+    }
     if (userId !== undefined && isAdmin(userId, deps.adminIds)) {
       try {
         const screen = await handleAdminText(deps.db, userId, ctx.message.text, Math.floor(Date.now() / 1000));
@@ -188,6 +240,24 @@ export function createBot(deps: BotDeps): Bot {
       }
     }
     await ctx.reply("Tap /start to open the ZIPPY menu.");
+  });
+
+  // The customer tapped "Share my phone number".
+  bot.on("message:contact", async (ctx) => {
+    const userId = ctx.from?.id;
+    if (userId === undefined) return;
+    try {
+      const flow = await handleContact(
+        deps.db,
+        { id: userId, firstName: ctx.from?.first_name },
+        { phone_number: ctx.message.contact.phone_number, user_id: ctx.message.contact.user_id },
+        Math.floor(Date.now() / 1000),
+      );
+      await sendFlow(ctx, flow);
+    } catch (err) {
+      console.error("zippy contact error:", safeError(err));
+      await ctx.reply("Something went wrong. Please try again.");
+    }
   });
 
   bot.on("message", async (ctx) => {

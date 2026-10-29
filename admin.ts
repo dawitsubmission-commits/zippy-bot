@@ -136,11 +136,23 @@ function cafeteriaScreen(c: { id: number; name: string; active: boolean }, avail
   };
 }
 
+async function phoneRequired(db: Db): Promise<boolean> {
+  const r = await db.prepare("SELECT value FROM settings WHERE key = 'require_phone'").first<{ value: string }>();
+  return r?.value !== "0";
+}
+
 async function settingsScreen(db: Db): Promise<Screen> {
   const fee = await getFeePerPortion(db);
+  const phone = await phoneRequired(db);
   return {
-    text: `⚙️ Bot Settings\n\nDelivery fee: ${formatEtb(fee)} per portion\n\nMore settings will be added in later steps.`,
-    buttons: [[{ text: "💵 Change delivery fee", data: "a:fee" }], [ADMIN_PANEL_BUTTON]],
+    text:
+      `⚙️ Bot Settings\n\nDelivery fee: ${formatEtb(fee)} per portion\n` +
+      `Phone number at the first order: ${phone ? "Required ✅" : "Not required ❌"}\n\nMore settings will be added in later steps.`,
+    buttons: [
+      [{ text: "💵 Change delivery fee", data: "a:fee" }],
+      [{ text: phone ? "📱 Don't require a phone number" : "📱 Require a phone number", data: "a:ph" }],
+      [ADMIN_PANEL_BUTTON],
+    ],
   };
 }
 
@@ -288,7 +300,7 @@ async function applyAction(db: Db, adminId: number, action: BasicAction, now: nu
 
 export type AdminResult = { screen?: Screen; toast?: string; alert?: boolean };
 
-const SIMPLE = new Set(["a:menu", "a:cafes", "a:settings", "a:fee", "a:cy", "a:cn"]);
+const SIMPLE = new Set(["a:menu", "a:cafes", "a:settings", "a:fee", "a:ph", "a:cy", "a:cn"]);
 
 // Returns null for admin buttons this file does not handle (the placeholder screens).
 export async function handleAdmin(db: Db, adminId: number, data: string, now: number): Promise<AdminResult | null> {
@@ -310,6 +322,20 @@ export async function handleAdmin(db: Db, adminId: number, data: string, now: nu
   if (data === "a:settings") {
     await clearState(db, adminId);
     return { screen: await settingsScreen(db) };
+  }
+  if (data === "a:ph") {
+    const old = (await phoneRequired(db)) ? "1" : "0";
+    const next = old === "1" ? "0" : "1";
+    await db.batch([
+      db
+        .prepare(AUDIT_SQL + "SELECT ?, ?, 'settings.require_phone', 'settings', ? WHERE EXISTS (SELECT 1 FROM settings WHERE key = 'require_phone' AND value = ?)")
+        .bind(now, adminId, JSON.stringify({ from: old, to: next }), old),
+      db.prepare("UPDATE settings SET value = ? WHERE key = 'require_phone' AND value = ?").bind(next, old),
+    ]);
+    return {
+      screen: await settingsScreen(db),
+      toast: next === "1" ? "New customers must now share a phone number." : "A phone number is no longer required.",
+    };
   }
   if (data === "a:fee") {
     await setState(db, adminId, { step: "fee" }, now);

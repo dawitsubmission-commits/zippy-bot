@@ -187,7 +187,7 @@ export async function decreaseInCart(db: Db, userId: number, itemId: number, now
 
 // ---------- the handler for shop buttons ----------
 
-export type ShopResult = { screen?: Screen; toast?: string; alert?: boolean };
+export type ShopResult = { screen?: Screen; toast?: string; alert?: boolean; next?: "checkout" };
 
 async function selectionScreen(db: Db, userId: number, now: number): Promise<Screen> {
   const [cafeterias, cart, status] = await Promise.all([listCafeterias(db), loadCart(db, userId, now), getOrderingStatus(db, now)]);
@@ -207,15 +207,15 @@ async function menuScreen(db: Db, userId: number, cafeteriaId: number, now: numb
   return foodMenuScreen(cafeteria, items, cart.portions, fee, describeStatus(status));
 }
 
-async function currentCartScreen(
+export async function currentCartScreen(
   db: Db,
   userId: number,
   now: number,
-): Promise<{ screen: Screen; hasUnavailable: boolean; orderingOpen: boolean; statusLine: string }> {
+): Promise<{ screen: Screen; hasUnavailable: boolean; orderingOpen: boolean; statusLine: string; lineCount: number }> {
   const status = await getOrderingStatus(db, now);
   const statusLine = describeStatus(status);
   const cart = await loadCart(db, userId, now);
-  const empty = { screen: emptyCartScreen(), hasUnavailable: false, orderingOpen: status.open, statusLine };
+  const empty = { screen: emptyCartScreen(), hasUnavailable: false, orderingOpen: status.open, statusLine, lineCount: 0 };
   if (cart.cafeteriaId === null || cart.lines.length === 0) return empty;
   const [cafeteria, fee] = await Promise.all([getCafeteria(db, cart.cafeteriaId), getFeePerPortion(db)]);
   if (!cafeteria) return empty;
@@ -224,6 +224,7 @@ async function currentCartScreen(
     hasUnavailable: cart.lines.some((l) => !l.available),
     orderingOpen: status.open,
     statusLine,
+    lineCount: cart.lines.length,
   };
 }
 
@@ -284,14 +285,12 @@ export async function handleShop(db: Db, userId: number, data: string, now: numb
       return { screen: (await currentCartScreen(db, userId, now)).screen };
     }
     case "checkout": {
-      const { screen, hasUnavailable, orderingOpen, statusLine } = await currentCartScreen(db, userId, now);
+      const { screen, hasUnavailable, orderingOpen, statusLine, lineCount } = await currentCartScreen(db, userId, now);
       // Checks happen here on the server: a closed schedule always wins over whatever button was tapped.
-      const toast = !orderingOpen
-        ? `${statusLine}\nYour cart is saved.`
-        : hasUnavailable
-          ? "Remove the unavailable items first."
-          : "Checkout isn't open yet. Your cart is saved.";
-      return { screen, toast, alert: true };
+      if (!orderingOpen) return { screen, toast: `${statusLine}\nYour cart is saved.`, alert: true };
+      if (hasUnavailable) return { screen, toast: "Remove the unavailable items first.", alert: true };
+      if (lineCount === 0) return { screen };
+      return { screen, next: "checkout" }; // the bot now starts the checkout steps (see checkout.ts)
     }
   }
 }

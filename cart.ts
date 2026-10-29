@@ -145,20 +145,10 @@ export function emptyCartScreen(): Screen {
   };
 }
 
-export type CartOptions = { statusLine?: string; orderingOpen?: boolean };
-
-export function cartScreen(
-  cafeteria: { id: number; name: string },
-  lines: CartLine[],
-  feePerPortion: number,
-  options: CartOptions = {},
-): Screen {
-  if (lines.length === 0) return emptyCartScreen();
+// The item lines and the totals, shared by the cart and the order review.
+export function cartSummaryLines(lines: CartLine[], feePerPortion: number): string[] {
   const pricing = priceCart(lines, feePerPortion);
-  const hasUnavailable = lines.some((l) => !l.available);
-  const hasAvailable = lines.some((l) => l.available);
-
-  const out: string[] = [`🛒 Your Cart — ${cafeteria.name}`, ""];
+  const out: string[] = [];
   lines.forEach((line, index) => {
     if (line.available) {
       out.push(`${index + 1}. ${line.name}`);
@@ -168,7 +158,7 @@ export function cartScreen(
     }
   });
   out.push("");
-  if (hasAvailable) {
+  if (lines.some((l) => l.available)) {
     out.push(`Food subtotal: ${formatEtb(pricing.subtotal)}`);
     out.push(
       `Delivery fee (${pricing.portions} portion${pricing.portions === 1 ? "" : "s"} × ${formatEtb(feePerPortion)}): ${formatEtb(pricing.fee)}`,
@@ -177,6 +167,22 @@ export function cartScreen(
   } else {
     out.push("None of the items in your cart are available right now.");
   }
+  return out;
+}
+
+export type CartOptions = { statusLine?: string; orderingOpen?: boolean };
+
+export function cartScreen(
+  cafeteria: { id: number; name: string },
+  lines: CartLine[],
+  feePerPortion: number,
+  options: CartOptions = {},
+): Screen {
+  if (lines.length === 0) return emptyCartScreen();
+  const hasUnavailable = lines.some((l) => !l.available);
+  const hasAvailable = lines.some((l) => l.available);
+
+  const out: string[] = [`🛒 Your Cart — ${cafeteria.name}`, "", ...cartSummaryLines(lines, feePerPortion)];
   if (hasUnavailable) out.push("", "Remove the unavailable items to continue.");
   if (options.statusLine) out.push("", options.statusLine);
 

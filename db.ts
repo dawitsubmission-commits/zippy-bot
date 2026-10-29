@@ -67,6 +67,17 @@ export const MIGRATIONS: Migration[] = [
       "CREATE TABLE schedule_override (id INTEGER PRIMARY KEY CHECK (id = 1), mode TEXT NOT NULL CHECK (mode IN ('open', 'closed')), until INTEGER NOT NULL, set_by INTEGER NOT NULL, set_at INTEGER NOT NULL)",
     ],
   },
+  {
+    id: "0005_checkout",
+    statements: [
+      // What we need to deliver: a name, and (if the owner requires it) a phone number shared through Telegram.
+      "CREATE TABLE customers (telegram_user_id INTEGER PRIMARY KEY, name TEXT NOT NULL, phone TEXT, phone_verified INTEGER NOT NULL DEFAULT 0 CHECK (phone_verified IN (0, 1)), last_location TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)",
+      // Remembers which checkout step a customer is on (for example: "typing a dorm number").
+      "CREATE TABLE customer_state (telegram_user_id INTEGER PRIMARY KEY, data TEXT NOT NULL, updated_at INTEGER NOT NULL)",
+      // PROVISIONAL (owner to confirm): ask for a verified phone number before the first order. 1 = required.
+      "INSERT INTO settings (key, value) VALUES ('require_phone', '1')",
+    ],
+  },
 ];
 
 // Applies any migrations that have not run yet. Safe to run many times.
