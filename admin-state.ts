@@ -26,7 +26,12 @@ export type HoursAction =
   | { type: "override"; mode: "open" | "closed"; until: number }
   | { type: "resume" };
 
-export type PendingAction = BasicAction | HoursAction;
+// Changes to the payment instructions (see admin-payments.ts).
+export type PaymentAction =
+  | { type: "pay_instr"; method: "cbe" | "cbe_birr"; text: string }
+  | { type: "pay_instr_clear"; method: "cbe" | "cbe_birr" };
+
+export type PendingAction = BasicAction | HoursAction | PaymentAction;
 
 export type AdminState =
   | { step: "price"; itemId: number }
@@ -39,11 +44,12 @@ export type AdminState =
   | { step: "win_close_time"; windowId: number; openMinute: number }
   | { step: "win_close_period"; windowId: number; openMinute: number; hour: number; minute: number }
   | { step: "closure_date" }
+  | { step: "pay_instr"; method: "cbe" | "cbe_birr" }
   | { step: "confirm"; action: PendingAction };
 
 const STEPS = [
   "price", "name", "new_name", "new_price", "fee",
-  "win_open_time", "win_open_period", "win_close_time", "win_close_period", "closure_date", "confirm",
+  "win_open_time", "win_open_period", "win_close_time", "win_close_period", "closure_date", "pay_instr", "confirm",
 ];
 
 export async function getState(db: Db, adminId: number, now: number): Promise<AdminState | null> {

@@ -4,6 +4,7 @@
 
 import { formatEtb } from "./cart";
 import { applyHoursAction, handleHoursCallback, handleHoursText, isHoursAction, isHoursStep } from "./admin-hours";
+import { applyPaymentsAction, handlePaymentsCallback, handlePaymentsText, isPaymentsAction, isPaymentsStep } from "./admin-payments";
 import {
   ADMIN_PANEL_BUTTON, AUDIT_SQL, CANCEL, clearState, confirmScreen, getState, promptScreen, setState,
   type AdminState, type BasicAction, type Outcome,
@@ -150,6 +151,7 @@ async function settingsScreen(db: Db): Promise<Screen> {
       `Phone number at the first order: ${phone ? "Required ✅" : "Not required ❌"}\n\nMore settings will be added in later steps.`,
     buttons: [
       [{ text: "💵 Change delivery fee", data: "a:fee" }],
+      [{ text: "💳 Payment instructions", data: "a:pi" }],
       [{ text: phone ? "📱 Don't require a phone number" : "📱 Require a phone number", data: "a:ph" }],
       [ADMIN_PANEL_BUTTON],
     ],
@@ -307,6 +309,9 @@ export async function handleAdmin(db: Db, adminId: number, data: string, now: nu
   // Opening-hours buttons live in admin-hours.ts.
   const hoursResult = await handleHoursCallback(db, adminId, data, now);
   if (hoursResult) return hoursResult;
+  // Payment instructions and the payment list live in admin-payments.ts.
+  const paymentsResult = await handlePaymentsCallback(db, adminId, data, now);
+  if (paymentsResult) return paymentsResult;
 
   const m = /^a:(mc|mi|en|ep|tg|ar|af|cf|cs):(\d{1,9})$/.exec(data);
   if (!m && !SIMPLE.has(data)) return null;
@@ -353,7 +358,9 @@ export async function handleAdmin(db: Db, adminId: number, data: string, now: nu
     await clearState(db, adminId); // clear first, so a double tap cannot apply it twice
     const outcome = isHoursAction(state.action)
       ? await applyHoursAction(db, adminId, state.action, now)
-      : await applyAction(db, adminId, state.action, now);
+      : isPaymentsAction(state.action)
+        ? await applyPaymentsAction(db, adminId, state.action, now)
+        : await applyAction(db, adminId, state.action, now);
     return { screen: outcome.screen, toast: outcome.message, alert: !outcome.ok };
   }
 
@@ -448,6 +455,7 @@ export async function handleAdminText(db: Db, adminId: number, text: string, now
     return { text: "Please tap Confirm or Cancel above, or send /cancel.", buttons: [] };
   }
   if (isHoursStep(state.step)) return handleHoursText(db, adminId, state, text, now);
+  if (isPaymentsStep(state.step)) return handlePaymentsText(db, adminId, state, text, now);
 
   if (state.step === "price") {
     const item = await getItem(db, state.itemId);

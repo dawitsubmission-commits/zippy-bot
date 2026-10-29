@@ -15,6 +15,7 @@ export type FlowResult = {
   alert?: boolean;
   askContact?: boolean; // the bot shows Telegram's "Share my phone number" button
   thanks?: string; // a short message sent before the next screen (removes the share button)
+  notify?: { fileId: string; caption: string }; // a screenshot to forward to the admin
 };
 
 const STATE_SECONDS = 30 * 60; // PROVISIONAL: a half-finished checkout is forgotten after 30 minutes
@@ -100,11 +101,15 @@ type CState =
   | { step: "dorm"; type: "men_new" | "men_old" }
   | { step: "floor"; type: "men_new" | "men_old"; dorm: string }
   | { step: "detail"; type: "women" | "other_campus" | "other_hawassa" }
-  | { step: "loc_confirm"; loc: Location };
+  | { step: "loc_confirm"; loc: Location }
+  | { step: "pay_ref"; sessionId: number }
+  | { step: "pay_photo"; sessionId: number };
 
-const CSTEPS = ["name", "phone", "dorm", "floor", "detail", "loc_confirm"];
+export type { CState };
 
-async function getState(db: Db, id: number, now: number): Promise<CState | null> {
+const CSTEPS = ["name", "phone", "dorm", "floor", "detail", "loc_confirm", "pay_ref", "pay_photo"];
+
+export async function getState(db: Db, id: number, now: number): Promise<CState | null> {
   const row = await db.prepare("SELECT data, updated_at FROM customer_state WHERE telegram_user_id = ?").bind(id).first<Row>();
   if (!row) return null;
   if (Number(row.updated_at) < now - STATE_SECONDS) {
@@ -121,7 +126,7 @@ async function getState(db: Db, id: number, now: number): Promise<CState | null>
   return null;
 }
 
-async function setState(db: Db, id: number, state: CState, now: number): Promise<void> {
+export async function setState(db: Db, id: number, state: CState, now: number): Promise<void> {
   await db
     .prepare(
       "INSERT INTO customer_state (telegram_user_id, data, updated_at) VALUES (?, ?, ?) " +
@@ -131,7 +136,7 @@ async function setState(db: Db, id: number, state: CState, now: number): Promise
     .run();
 }
 
-async function clearState(db: Db, id: number): Promise<void> {
+export async function clearState(db: Db, id: number): Promise<void> {
   await db.prepare("DELETE FROM customer_state WHERE telegram_user_id = ?").bind(id).run();
 }
 
@@ -273,7 +278,7 @@ export async function startCheckout(db: Db, user: User, now: number): Promise<Fl
 }
 
 // Checks again that the cart and the opening hours still allow checkout. Returns a problem or null.
-async function stillAllowed(db: Db, user: User, now: number): Promise<FlowResult | null> {
+export async function stillAllowed(db: Db, user: User, now: number): Promise<FlowResult | null> {
   const view = await currentCartScreen(db, user.id, now);
   if (!view.orderingOpen) return { screen: view.screen, toast: `${view.statusLine}\nYour cart is saved.`, alert: true };
   if (view.hasUnavailable) return { screen: view.screen, toast: "Remove the unavailable items first.", alert: true };
@@ -284,7 +289,7 @@ async function stillAllowed(db: Db, user: User, now: number): Promise<FlowResult
 const EXPIRED: FlowResult = { toast: "That step has expired. Please start again from your cart." };
 
 export async function handleCheckoutCallback(db: Db, user: User, data: string, now: number): Promise<FlowResult | null> {
-  if (!/^(n:use|l:(mn|mo|w|oc|oh|last|fg|ok|chg)|k:(cn|pay))$/.test(data)) return null;
+  if (!/^(n:use|l:(mn|mo|w|oc|oh|last|fg|ok|chg)|k:cn)$/.test(data)) return null;
 
   if (data === "k:cn") {
     await clearState(db, user.id);
@@ -356,10 +361,6 @@ export async function handleCheckoutCallback(db: Db, user: User, data: string, n
       await clearState(db, user.id);
       return reviewScreen(db, user, now);
     }
-    case "k:pay": {
-      const review = await reviewScreen(db, user, now);
-      return { ...review, toast: "Payment isn't open yet. Your cart and details are saved.", alert: true };
-    }
   }
   return null;
 }
@@ -368,6 +369,7 @@ export async function handleCheckoutCallback(db: Db, user: User, data: string, n
 export async function handleCheckoutText(db: Db, user: User, text: string, now: number): Promise<FlowResult | null> {
   const state = await getState(db, user.id, now);
   if (!state) return null;
+  if (state.step === "pay_ref" || state.step === "pay_photo") return null; // handled by payment.ts
 
   const problem = await stillAllowed(db, user, now);
   if (problem) {

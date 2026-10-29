@@ -78,6 +78,17 @@ export const MIGRATIONS: Migration[] = [
       "INSERT INTO settings (key, value) VALUES ('require_phone', '1')",
     ],
   },
+  {
+    id: "0006_payments",
+    statements: [
+      // One row per payment attempt. The prices are locked here, so later menu or fee changes never change it.
+      "CREATE TABLE checkout_sessions (id INTEGER PRIMARY KEY AUTOINCREMENT, customer_id INTEGER NOT NULL REFERENCES customers(telegram_user_id), cafeteria_id INTEGER NOT NULL REFERENCES cafeterias(id), method TEXT NOT NULL CHECK (method IN ('cbe', 'cbe_birr')), status TEXT NOT NULL CHECK (status IN ('awaiting_payment', 'under_verification', 'verified', 'rejected', 'expired', 'cancelled')), subtotal_santim INTEGER NOT NULL CHECK (subtotal_santim >= 0), fee_santim INTEGER NOT NULL CHECK (fee_santim >= 0), total_santim INTEGER NOT NULL CHECK (total_santim >= 0), portions INTEGER NOT NULL CHECK (portions >= 1), items_json TEXT NOT NULL, customer_name TEXT NOT NULL, location_json TEXT NOT NULL, created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL, bank_reference TEXT, screenshot_file_id TEXT, screenshot_unique_id TEXT, submitted_at INTEGER)",
+      // The same bank reference can never be used twice for a live or verified payment.
+      "CREATE UNIQUE INDEX uq_session_reference ON checkout_sessions (method, bank_reference) WHERE bank_reference IS NOT NULL AND status IN ('awaiting_payment', 'under_verification', 'verified')",
+      // A customer can have only one open payment at a time.
+      "CREATE UNIQUE INDEX uq_session_open ON checkout_sessions (customer_id) WHERE status IN ('awaiting_payment', 'under_verification')",
+    ],
+  },
 ];
 
 // Applies any migrations that have not run yet. Safe to run many times.

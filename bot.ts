@@ -2,6 +2,7 @@ import { Bot, InlineKeyboard, Keyboard } from "grammy";
 import type { UserFromGetMe } from "grammy/types";
 import { handleAdmin, handleAdminText } from "./admin";
 import { clearState, getState as getAdminState } from "./admin-state";
+import { handlePaymentCallback, handlePaymentPhoto, handlePaymentText } from "./payment";
 import { handleCheckoutCallback, handleCheckoutText, handleContact, startCheckout, type FlowResult } from "./checkout";
 import { isAdmin } from "./auth";
 import { claimUpdate, releaseUpdate, runMigrations, type Db } from "./db";
@@ -154,7 +155,7 @@ export function createBot(deps: BotDeps): Bot {
     // Checkout steps (name, phone, location, review), then cafeteria, menu and cart buttons.
     const user = { id: ctx.from.id, firstName: ctx.from.first_name };
     try {
-      const flow = await handleCheckoutCallback(deps.db, user, data, now);
+      const flow = (await handlePaymentCallback(deps.db, user, data, now)) ?? (await handleCheckoutCallback(deps.db, user, data, now));
       if (flow) {
         if (flow.askContact) {
           await ctx.answerCallbackQuery(flow.toast ? { text: flow.toast, show_alert: flow.alert === true } : undefined);
@@ -215,7 +216,13 @@ export function createBot(deps: BotDeps): Bot {
       userId !== undefined && isAdmin(userId, deps.adminIds) && (await getAdminState(deps.db, userId, nowSeconds)) !== null;
     if (userId !== undefined && !adminBusy) {
       try {
-        const flow = await handleCheckoutText(deps.db, { id: userId, firstName: ctx.from?.first_name }, ctx.message.text, nowSeconds);
+        const who = { id: userId, firstName: ctx.from?.first_name };
+        const payFlow = await handlePaymentText(deps.db, who, ctx.message.text, nowSeconds);
+        if (payFlow) {
+          await sendFlow(ctx, payFlow);
+          return;
+        }
+        const flow = await handleCheckoutText(deps.db, who, ctx.message.text, nowSeconds);
         if (flow) {
           await sendFlow(ctx, flow);
           return;
@@ -240,6 +247,37 @@ export function createBot(deps: BotDeps): Bot {
       }
     }
     await ctx.reply("Tap /start to open the ZIPPY menu.");
+  });
+
+  // The customer sent a screenshot of their payment receipt.
+  bot.on("message:photo", async (ctx) => {
+    const userId = ctx.from?.id;
+    if (userId === undefined) return;
+    const sizes = ctx.message.photo;
+    const best = sizes[sizes.length - 1];
+    try {
+      const flow = await handlePaymentPhoto(
+        deps.db,
+        { id: userId, firstName: ctx.from?.first_name },
+        { fileId: best.file_id, uniqueId: best.file_unique_id },
+        Math.floor(Date.now() / 1000),
+      );
+      if (flow.screen) await sendFlow(ctx, flow);
+      else if (flow.toast) await ctx.reply(flow.toast);
+      if (flow.notify) {
+        // Forward the screenshot to every admin. A failure here must not undo the customer's submission.
+        for (const adminId of deps.adminIds) {
+          try {
+            await ctx.api.sendPhoto(adminId, flow.notify.fileId, { caption: flow.notify.caption });
+          } catch (err) {
+            console.error("zippy notify error:", safeError(err));
+          }
+        }
+      }
+    } catch (err) {
+      console.error("zippy photo error:", safeError(err));
+      await ctx.reply("Something went wrong. Please try again.");
+    }
   });
 
   // The customer tapped "Share my phone number".
