@@ -1,6 +1,7 @@
-import { Bot, InlineKeyboard, Keyboard } from "grammy";
+import { Bot, InlineKeyboard, InputFile, Keyboard } from "grammy";
 import type { UserFromGetMe } from "grammy/types";
 import { handleAdmin, handleAdminText } from "./admin";
+import { recordUser } from "./admin-customers";
 import { clearState, getState as getAdminState } from "./admin-state";
 import { handleCustomerOrders } from "./orders";
 import { handlePaymentCallback, handlePaymentPhoto, handlePaymentText } from "./payment";
@@ -39,7 +40,13 @@ function isNotModified(err: unknown): boolean {
   return typeof description === "string" && description.includes("message is not modified");
 }
 
-type Reply = { screen?: Screen; toast?: string; alert?: boolean; notify?: { chatId: number; text: string }[] };
+type Reply = {
+  screen?: Screen;
+  toast?: string;
+  alert?: boolean;
+  notify?: { chatId: number; text: string }[];
+  document?: { filename: string; text: string };
+};
 
 // Answers the button tap (toast or alert) and shows the new screen by editing the message.
 async function respond(
@@ -47,6 +54,7 @@ async function respond(
     answerCallbackQuery: (o?: { text?: string; show_alert?: boolean }) => Promise<unknown>;
     editMessageText: (text: string, other?: { reply_markup?: InlineKeyboard }) => Promise<unknown>;
     api: { sendMessage: (chatId: number, text: string) => Promise<unknown> };
+    replyWithDocument: (file: InputFile) => Promise<unknown>;
   },
   r: Reply,
 ): Promise<void> {
@@ -57,6 +65,10 @@ async function respond(
     } catch (err) {
       if (!isNotModified(err)) throw err;
     }
+  }
+  // A file for the admin (for example the customer export).
+  if (r.document) {
+    await ctx.replyWithDocument(new InputFile(new TextEncoder().encode(r.document.text), r.document.filename));
   }
   // Tell the customer (for example: payment confirmed, order on its way). A failure here is only logged.
   for (const n of r.notify ?? []) {
@@ -107,6 +119,14 @@ export function createBot(deps: BotDeps): Bot {
   });
 
   bot.command("start", async (ctx) => {
+    // Remember that this person pressed Start. If this fails, the menu still shows.
+    if (ctx.from) {
+      try {
+        await recordUser(deps.db, ctx.from.id, ctx.from.username, Math.floor(Date.now() / 1000));
+      } catch (err) {
+        console.error("zippy record user error:", safeError(err));
+      }
+    }
     const menu = mainMenu();
     await ctx.reply(menu.text, { reply_markup: toKeyboard(menu) });
   });

@@ -109,6 +109,12 @@ async function openSession(db: Db, customerId: number, now: number): Promise<Ses
   return r ? toSession(r) : null;
 }
 
+// Older payments have a real bank reference. New ones don't, and store a placeholder (NONE-<id>) so the
+// database rules keep working. The placeholder is never shown to anyone.
+export function displayReference(ref: string | null): string | null {
+  return ref && !ref.startsWith("NONE-") ? ref : null;
+}
+
 export function itemsText(items: Session["items"]): string {
   return items.map((i) => `${i.qty}× ${i.name}`).join(", ");
 }
@@ -118,7 +124,7 @@ export function itemsText(items: Session["items"]): string {
 function waitingScreen(s: Session): Screen {
   return {
     text:
-      `⏳ Your payment is being checked\n\nAmount: ${formatEtb(s.total)} (${s.method === "cbe" ? "CBE" : "CBE Birr"})\nReference: ${s.bankReference ?? "-"}\n\n` +
+      `⏳ Your payment is being checked\n\nAmount: ${formatEtb(s.total)} (${s.method === "cbe" ? "CBE" : "CBE Birr"})\n\n` +
       "Your order is not confirmed yet. We'll message you as soon as we have checked the payment.",
     buttons: [[MAIN_MENU]],
   };
@@ -146,7 +152,7 @@ function instructionsScreen(s: Session, instructions: string): Screen {
       "",
       instructions,
       "",
-      "After you pay, type the transaction reference from your receipt.",
+      "After you pay, send a screenshot of your receipt here as a photo.",
       `Please finish by ${etTimeFromEpoch(s.expiresAt)}, or this payment attempt will close.`,
     ].join("\n"),
     buttons: [[CANCEL_PAYMENT]],
@@ -236,13 +242,13 @@ export async function handlePaymentCallback(db: Db, user: User, data: string, no
   if (!instructions) return { toast: "That payment method isn't available yet.", alert: true };
   const created = await createSession(db, user, method, now);
   if (!created.ok) return created.result;
-  await setState(db, user.id, { step: "pay_ref", sessionId: created.session.id }, now);
+  await setState(db, user.id, { step: "pay_photo", sessionId: created.session.id }, now);
   return { screen: instructionsScreen(created.session, instructions) };
 }
 
 // ---------- typed text (the bank reference) ----------
 
-export async function handlePaymentText(db: Db, user: User, text: string, now: number): Promise<FlowResult | null> {
+export async function handlePaymentText(db: Db, user: User, _text: string, now: number): Promise<FlowResult | null> {
   const state = await getState(db, user.id, now);
   if (!state || (state.step !== "pay_ref" && state.step !== "pay_photo")) return null;
 
@@ -251,42 +257,7 @@ export async function handlePaymentText(db: Db, user: User, text: string, now: n
     await clearState(db, user.id);
     return { screen: { text: "This payment attempt has closed. Your cart is saved. Start again from your cart.", buttons: [[{ text: "🛒 View Cart", data: "v:cart" }]] } };
   }
-
-  if (state.step === "pay_photo") {
-    return { screen: { text: "Please send the screenshot of your receipt as a photo (not as text).", buttons: [[CANCEL_PAYMENT]] } };
-  }
-
-  const reference = validateReference(text);
-  if (!reference) {
-    return {
-      screen: {
-        text: "That doesn't look like a transaction reference. Type the reference shown on your receipt (5 to 40 letters and numbers), or tap Cancel.",
-        buttons: [[CANCEL_PAYMENT]],
-      },
-    };
-  }
-  try {
-    const res = await db
-      .prepare("UPDATE checkout_sessions SET bank_reference = ? WHERE id = ? AND customer_id = ? AND status = 'awaiting_payment' AND expires_at > ?")
-      .bind(reference, session.id, user.id, now)
-      .run();
-    if (res.meta?.changes !== 1) throw new Error("not updated");
-  } catch {
-    // Most likely this reference was already used for another payment.
-    return {
-      screen: {
-        text: "That reference can't be used (it may already be linked to another payment). Please check it and type it again, or tap Cancel.",
-        buttons: [[CANCEL_PAYMENT]],
-      },
-    };
-  }
-  await setState(db, user.id, { step: "pay_photo", sessionId: session.id }, now);
-  return {
-    screen: {
-      text: `Reference ${reference} saved.\n\n📸 Now send a screenshot of your payment receipt as a photo.`,
-      buttons: [[CANCEL_PAYMENT]],
-    },
-  };
+  return { screen: { text: "Please send the screenshot of your receipt as a photo (not as text).", buttons: [[CANCEL_PAYMENT]] } };
 }
 
 // ---------- the screenshot ----------
@@ -298,11 +269,11 @@ export async function handlePaymentPhoto(
   now: number,
 ): Promise<FlowResult> {
   const state = await getState(db, user.id, now);
-  if (!state || state.step !== "pay_photo") {
+  if (!state || (state.step !== "pay_photo" && state.step !== "pay_ref")) {
     return { screen: { text: "Thanks, but we weren't expecting a photo right now. Tap /start to open the ZIPPY menu.", buttons: [] } };
   }
   const session = await getSession(db, state.sessionId);
-  if (!session || session.customerId !== user.id || session.status !== "awaiting_payment" || session.expiresAt <= now || !session.bankReference) {
+  if (!session || session.customerId !== user.id || session.status !== "awaiting_payment" || session.expiresAt <= now) {
     await clearState(db, user.id);
     return { screen: { text: "This payment attempt has closed. Your cart is saved. Start again from your cart.", buttons: [[{ text: "🛒 View Cart", data: "v:cart" }]] } };
   }
@@ -331,8 +302,9 @@ export async function handlePaymentPhoto(
 
   const res = await db
     .prepare(
-      "UPDATE checkout_sessions SET status = 'under_verification', screenshot_file_id = ?, screenshot_unique_id = ?, submitted_at = ? " +
-        "WHERE id = ? AND customer_id = ? AND status = 'awaiting_payment' AND bank_reference IS NOT NULL AND expires_at > ?",
+      "UPDATE checkout_sessions SET status = 'under_verification', screenshot_file_id = ?, screenshot_unique_id = ?, submitted_at = ?, " +
+        "bank_reference = COALESCE(bank_reference, 'NONE-' || id) " +
+        "WHERE id = ? AND customer_id = ? AND status = 'awaiting_payment' AND expires_at > ?",
     )
     .bind(photo.fileId, photo.uniqueId, now, session.id, user.id, now)
     .run();
@@ -347,7 +319,7 @@ export async function handlePaymentPhoto(
     `Customer: ${submitted.name}`,
     customer?.phone ? `Phone: ${customer.phone}` : "",
     `Amount: ${formatEtb(submitted.total)}`,
-    `Bank reference: ${submitted.bankReference}`,
+    displayReference(submitted.bankReference) ? `Bank reference: ${displayReference(submitted.bankReference)}` : "",
     `Items: ${itemsText(submitted.items)}`,
     `Deliver to: ${submitted.location}`,
     "",

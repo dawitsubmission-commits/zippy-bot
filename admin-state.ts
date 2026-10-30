@@ -37,7 +37,10 @@ export type OrderAction =
   | { type: "pay_reject"; sessionId: number; reason: string }
   | { type: "order_status"; orderId: number; from: string; to: string };
 
-export type PendingAction = BasicAction | HoursAction | PaymentAction | OrderAction;
+// Exporting the customer list (see admin-customers.ts).
+export type CustomersAction = { type: "export_customers" };
+
+export type PendingAction = BasicAction | HoursAction | PaymentAction | OrderAction | CustomersAction;
 
 export type AdminState =
   | { step: "price"; itemId: number }
@@ -51,11 +54,12 @@ export type AdminState =
   | { step: "win_close_period"; windowId: number; openMinute: number; hour: number; minute: number }
   | { step: "closure_date" }
   | { step: "pay_instr"; method: "cbe" | "cbe_birr" }
+  | { step: "cust_search" }
   | { step: "confirm"; action: PendingAction };
 
 const STEPS = [
   "price", "name", "new_name", "new_price", "fee",
-  "win_open_time", "win_open_period", "win_close_time", "win_close_period", "closure_date", "pay_instr", "confirm",
+  "win_open_time", "win_open_period", "win_close_time", "win_close_period", "closure_date", "pay_instr", "cust_search", "confirm",
 ];
 
 export async function getState(db: Db, adminId: number, now: number): Promise<AdminState | null> {
@@ -114,4 +118,4 @@ export const AUDIT_SQL = "INSERT INTO audit_log (at, actor_telegram_id, action, 
 // A message the bot sends to a customer after an admin action (the customer's chat id is their Telegram id).
 export type Notify = { chatId: number; text: string };
 
-export type Outcome = { ok: boolean; message: string; screen: Screen; notify?: Notify[] };
+export type Outcome = { ok: boolean; message: string; screen: Screen; notify?: Notify[]; document?: { filename: string; text: string } };

@@ -12,7 +12,7 @@ import { overviewScreen } from "./admin-payments";
 import { formatEtb } from "./cart";
 import type { Db } from "./db";
 import { ALLOWED, STATUS_ICON, STATUS_LABEL, PAYMENT_LABEL, dateTimeText, getOrder, getOrderBySession, orderNumber, receiptText, statusMessage, type Order, type OrderStatus } from "./orders";
-import { METHODS, getSession } from "./payment";
+import { METHODS, displayReference, getSession } from "./payment";
 import type { Button, Screen } from "./screens";
 
 type Row = Record<string, unknown>;
@@ -96,7 +96,7 @@ async function detailScreen(db: Db, o: Order): Promise<Screen> {
     `Food subtotal: ${formatEtb(o.subtotal)}`,
     `Delivery fee (${o.portions} portion${o.portions === 1 ? "" : "s"}): ${formatEtb(o.fee)}`,
     `Total: ${formatEtb(o.total)}`,
-    `Bank reference: ${o.bankReference}`,
+    displayReference(o.bankReference) ? `Bank reference: ${displayReference(o.bankReference)}` : "",
     "",
     "History:",
     ...history,
@@ -158,7 +158,7 @@ export async function handleOrdersCallback(db: Db, adminId: number, data: string
     await setState(db, adminId, { step: "confirm", action: { type: "pay_verify", sessionId: s.id } }, now);
     return {
       screen: confirmScreen(
-        `Confirm payment #${s.id}?\n\nOnly confirm if you have checked your REAL ${METHODS[s.method].label} account and ${formatEtb(s.total)} has arrived (reference ${s.bankReference}).\n\n` +
+        `Confirm payment #${s.id}?\n\nOnly confirm if you have checked your REAL ${METHODS[s.method].label} account and ${formatEtb(s.total)} has arrived${displayReference(s.bankReference) ? ` (reference ${displayReference(s.bankReference)})` : ""}.\n\n` +
           `This creates the order for ${s.name}.`,
       ),
     };
@@ -174,7 +174,6 @@ export async function handleOrdersCallback(db: Db, adminId: number, data: string
         buttons: [
           [{ text: "Payment not found", data: `a:pr:${s.id}:n` }],
           [{ text: "Wrong amount", data: `a:pr:${s.id}:w` }],
-          [{ text: "Reference not found", data: `a:pr:${s.id}:f` }],
           [{ text: "Screenshot not clear", data: `a:pr:${s.id}:u` }],
           [{ text: "✖ Back", data: `a:ps:${s.id}` }],
         ],

@@ -4,6 +4,7 @@
 
 import { formatEtb } from "./cart";
 import { applyHoursAction, handleHoursCallback, handleHoursText, isHoursAction, isHoursStep } from "./admin-hours";
+import { applyCustomersAction, handleCustomersCallback, handleCustomersText, isCustomersAction, isCustomersStep } from "./admin-customers";
 import { applyOrdersAction, handleOrdersCallback, isOrdersAction } from "./admin-orders";
 import { applyPaymentsAction, handlePaymentsCallback, handlePaymentsText, isPaymentsAction, isPaymentsStep } from "./admin-payments";
 import {
@@ -301,7 +302,7 @@ async function applyAction(db: Db, adminId: number, action: BasicAction, now: nu
 
 // ---------- the handler for admin buttons ----------
 
-export type AdminResult = { screen?: Screen; toast?: string; alert?: boolean; notify?: Notify[] };
+export type AdminResult = { screen?: Screen; toast?: string; alert?: boolean; notify?: Notify[]; document?: { filename: string; text: string } };
 
 const SIMPLE = new Set(["a:menu", "a:cafes", "a:settings", "a:fee", "a:ph", "a:cy", "a:cn"]);
 
@@ -316,6 +317,9 @@ export async function handleAdmin(db: Db, adminId: number, data: string, now: nu
   // Confirming payments and managing orders live in admin-orders.ts.
   const ordersResult = await handleOrdersCallback(db, adminId, data, now);
   if (ordersResult) return ordersResult;
+  // Dashboard, statistics, customers and reports live in admin-customers.ts.
+  const customersResult = await handleCustomersCallback(db, adminId, data, now);
+  if (customersResult) return customersResult;
 
   const m = /^a:(mc|mi|en|ep|tg|ar|af|cf|cs):(\d{1,9})$/.exec(data);
   if (!m && !SIMPLE.has(data)) return null;
@@ -366,8 +370,10 @@ export async function handleAdmin(db: Db, adminId: number, data: string, now: nu
         ? await applyPaymentsAction(db, adminId, state.action, now)
         : isOrdersAction(state.action)
           ? await applyOrdersAction(db, adminId, state.action, now)
-          : await applyAction(db, adminId, state.action, now);
-    return { screen: outcome.screen, toast: outcome.message, alert: !outcome.ok, notify: outcome.notify };
+          : isCustomersAction(state.action)
+            ? await applyCustomersAction(db, adminId, state.action, now)
+            : await applyAction(db, adminId, state.action, now);
+    return { screen: outcome.screen, toast: outcome.message, alert: !outcome.ok, notify: outcome.notify, document: outcome.document };
   }
 
   const kind = m![1];
@@ -462,6 +468,7 @@ export async function handleAdminText(db: Db, adminId: number, text: string, now
   }
   if (isHoursStep(state.step)) return handleHoursText(db, adminId, state, text, now);
   if (isPaymentsStep(state.step)) return handlePaymentsText(db, adminId, state, text, now);
+  if (isCustomersStep(state.step)) return handleCustomersText(db, adminId, state, text);
 
   if (state.step === "price") {
     const item = await getItem(db, state.itemId);

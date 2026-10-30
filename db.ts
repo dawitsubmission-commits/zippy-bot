@@ -103,6 +103,14 @@ export const MIGRATIONS: Migration[] = [
       "CREATE TABLE payment_events (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id INTEGER NOT NULL REFERENCES checkout_sessions(id), event TEXT NOT NULL CHECK (event IN ('verified', 'rejected')), actor_telegram_id INTEGER NOT NULL, reason TEXT NOT NULL DEFAULT '', at INTEGER NOT NULL)",
     ],
   },
+  {
+    id: "0008_customers",
+    statements: [
+      // Everyone who pressed Start (for the "registered bot users" number). Username is optional and can change.
+      "CREATE TABLE bot_users (telegram_user_id INTEGER PRIMARY KEY, username TEXT, first_seen_at INTEGER NOT NULL, last_seen_at INTEGER NOT NULL)",
+      "CREATE INDEX idx_orders_created ON orders (created_at)",
+    ],
+  },
 ];
 
 // Applies any migrations that have not run yet. Safe to run many times.

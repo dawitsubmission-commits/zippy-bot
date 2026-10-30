@@ -9,7 +9,7 @@ import {
 } from "./admin-state";
 import { formatEtb } from "./cart";
 import type { Db } from "./db";
-import { METHODS, getSession, itemsText, type Method } from "./payment";
+import { METHODS, displayReference, getSession, itemsText, type Method } from "./payment";
 import { etTimeFromEpoch } from "./schedule-text";
 import type { Button, Screen } from "./screens";
 
@@ -109,7 +109,7 @@ async function detailScreen(db: Db, id: number): Promise<Screen | null> {
     `Delivery fee: ${formatEtb(s.fee)}`,
     `Total expected: ${formatEtb(s.total)}`,
     "",
-    `Bank reference: ${s.bankReference ?? "-"}`,
+    displayReference(s.bankReference) ? `Bank reference: ${displayReference(s.bankReference)}` : "",
     s.submittedAt ? `Submitted: ${etTimeFromEpoch(s.submittedAt)}` : "",
     "",
     "The screenshot was sent to you when it arrived. Check the REAL account before anything is confirmed.",
