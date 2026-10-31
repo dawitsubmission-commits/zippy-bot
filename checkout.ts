@@ -16,6 +16,7 @@ export type FlowResult = {
   askContact?: boolean; // the bot shows Telegram's "Share my phone number" button
   thanks?: string; // a short message sent before the next screen (removes the share button)
   notify?: { fileId: string; caption: string }; // a screenshot to forward to the admin
+  adminNotify?: { text: string; buttons?: Button[][] }; // a message for the admin(s)
 };
 
 const STATE_SECONDS = 30 * 60; // PROVISIONAL: a half-finished checkout is forgotten after 30 minutes
@@ -103,11 +104,14 @@ type CState =
   | { step: "detail"; type: "women" | "other_campus" | "other_hawassa" }
   | { step: "loc_confirm"; loc: Location }
   | { step: "pay_ref"; sessionId: number }
-  | { step: "pay_photo"; sessionId: number };
+  | { step: "pay_photo"; sessionId: number }
+  | { step: "refund_name"; refundId: number; method: "cbe" | "cbe_birr" }
+  | { step: "refund_number"; refundId: number; method: "cbe" | "cbe_birr"; name: string }
+  | { step: "refund_confirm"; refundId: number; method: "cbe" | "cbe_birr"; name: string; number: string };
 
 export type { CState };
 
-const CSTEPS = ["name", "phone", "dorm", "floor", "detail", "loc_confirm", "pay_ref", "pay_photo"];
+const CSTEPS = ["name", "phone", "dorm", "floor", "detail", "loc_confirm", "pay_ref", "pay_photo", "refund_name", "refund_number", "refund_confirm"];
 
 export async function getState(db: Db, id: number, now: number): Promise<CState | null> {
   const row = await db.prepare("SELECT data, updated_at FROM customer_state WHERE telegram_user_id = ?").bind(id).first<Row>();
@@ -370,6 +374,7 @@ export async function handleCheckoutText(db: Db, user: User, text: string, now: 
   const state = await getState(db, user.id, now);
   if (!state) return null;
   if (state.step === "pay_ref" || state.step === "pay_photo") return null; // handled by payment.ts
+  if (state.step === "refund_name" || state.step === "refund_number" || state.step === "refund_confirm") return null; // handled by refunds.ts
 
   const problem = await stillAllowed(db, user, now);
   if (problem) {

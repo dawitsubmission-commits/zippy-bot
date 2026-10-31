@@ -3,12 +3,14 @@ import type { UserFromGetMe } from "grammy/types";
 import { handleAdmin, handleAdminText } from "./admin";
 import { recordUser } from "./admin-customers";
 import { clearState, getState as getAdminState } from "./admin-state";
+import { handleRefundProof } from "./admin-refunds";
 import { handleCustomerOrders } from "./orders";
+import { handleRefundCallback, handleRefundText } from "./refunds";
 import { handlePaymentCallback, handlePaymentPhoto, handlePaymentText } from "./payment";
 import { handleCheckoutCallback, handleCheckoutText, handleContact, startCheckout, type FlowResult } from "./checkout";
 import { isAdmin } from "./auth";
 import { claimUpdate, releaseUpdate, runMigrations, type Db } from "./db";
-import { adminPanel, mainMenu, routeCallback, type Screen } from "./screens";
+import { adminPanel, mainMenu, routeCallback, type Button, type Screen } from "./screens";
 import { handleShop, type ShopResult } from "./store";
 
 export type BotDeps = {
@@ -44,7 +46,7 @@ type Reply = {
   screen?: Screen;
   toast?: string;
   alert?: boolean;
-  notify?: { chatId: number; text: string }[];
+  notify?: { chatId: number; text: string; buttons?: Button[][]; photoFileId?: string }[];
   document?: { filename: string; text: string };
 };
 
@@ -53,7 +55,10 @@ async function respond(
   ctx: {
     answerCallbackQuery: (o?: { text?: string; show_alert?: boolean }) => Promise<unknown>;
     editMessageText: (text: string, other?: { reply_markup?: InlineKeyboard }) => Promise<unknown>;
-    api: { sendMessage: (chatId: number, text: string) => Promise<unknown> };
+    api: {
+      sendMessage: (chatId: number, text: string, other?: { reply_markup?: InlineKeyboard }) => Promise<unknown>;
+      sendPhoto: (chatId: number, photo: string, other?: { caption?: string; reply_markup?: InlineKeyboard }) => Promise<unknown>;
+    };
     replyWithDocument: (file: InputFile) => Promise<unknown>;
   },
   r: Reply,
@@ -73,7 +78,9 @@ async function respond(
   // Tell the customer (for example: payment confirmed, order on its way). A failure here is only logged.
   for (const n of r.notify ?? []) {
     try {
-      await ctx.api.sendMessage(n.chatId, n.text);
+      const markup = n.buttons && n.buttons.length > 0 ? { reply_markup: toKeyboard({ text: n.text, buttons: n.buttons }) } : undefined;
+      if (n.photoFileId) await ctx.api.sendPhoto(n.chatId, n.photoFileId, { caption: n.text, ...(markup ?? {}) });
+      else await ctx.api.sendMessage(n.chatId, n.text, markup);
     } catch (err) {
       console.error("zippy customer notice error:", safeError(err));
     }
@@ -96,6 +103,20 @@ async function sendFlow(ctx: Sender, r: FlowResult): Promise<void> {
 }
 
 export function createBot(deps: BotDeps): Bot {
+  // A message for the admin(s), for example "new refund request". A failure is only logged.
+  async function notifyAdmins(
+    api: { sendMessage: (chatId: number, text: string, other?: { reply_markup?: InlineKeyboard }) => Promise<unknown> },
+    n: { text: string; buttons?: Button[][] },
+  ): Promise<void> {
+    for (const adminId of deps.adminIds) {
+      try {
+        await api.sendMessage(adminId, n.text, n.buttons && n.buttons.length > 0 ? { reply_markup: toKeyboard({ text: n.text, buttons: n.buttons }) } : undefined);
+      } catch (err) {
+        console.error("zippy admin notice error:", safeError(err));
+      }
+    }
+  }
+
   const bot = new Bot(deps.token, deps.botInfo ? { botInfo: deps.botInfo } : undefined);
 
   // 1) Only talk in private chats. Ignore groups and channels completely.
@@ -188,7 +209,10 @@ export function createBot(deps: BotDeps): Bot {
     // Checkout steps (name, phone, location, review), then cafeteria, menu and cart buttons.
     const user = { id: ctx.from.id, firstName: ctx.from.first_name };
     try {
-      const flow = (await handlePaymentCallback(deps.db, user, data, now)) ?? (await handleCheckoutCallback(deps.db, user, data, now));
+      const flow =
+        (await handlePaymentCallback(deps.db, user, data, now)) ??
+        (await handleRefundCallback(deps.db, user, data, now)) ??
+        (await handleCheckoutCallback(deps.db, user, data, now));
       if (flow) {
         if (flow.askContact) {
           await ctx.answerCallbackQuery(flow.toast ? { text: flow.toast, show_alert: flow.alert === true } : undefined);
@@ -196,6 +220,7 @@ export function createBot(deps: BotDeps): Bot {
         } else {
           await respond(ctx, flow);
         }
+        if (flow.adminNotify) await notifyAdmins(ctx.api, flow.adminNotify);
         return;
       }
       const shop = await handleShop(deps.db, ctx.from.id, data, now);
@@ -260,6 +285,11 @@ export function createBot(deps: BotDeps): Bot {
           await sendFlow(ctx, payFlow);
           return;
         }
+        const refundFlow = await handleRefundText(deps.db, who, ctx.message.text, nowSeconds);
+        if (refundFlow) {
+          await sendFlow(ctx, refundFlow);
+          return;
+        }
         const flow = await handleCheckoutText(deps.db, who, ctx.message.text, nowSeconds);
         if (flow) {
           await sendFlow(ctx, flow);
@@ -294,6 +324,16 @@ export function createBot(deps: BotDeps): Bot {
     const sizes = ctx.message.photo;
     const best = sizes[sizes.length - 1];
     try {
+      // An admin who is about to confirm a refund sends the transfer screenshot here.
+      if (isAdmin(userId, deps.adminIds)) {
+        const nowSeconds = Math.floor(Date.now() / 1000);
+        const adminState = await getAdminState(deps.db, userId, nowSeconds);
+        const proof = await handleRefundProof(deps.db, userId, adminState, best.file_id, nowSeconds);
+        if (proof) {
+          await ctx.reply(proof.text, proof.buttons.length > 0 ? { reply_markup: toKeyboard(proof) } : undefined);
+          return;
+        }
+      }
       const flow = await handlePaymentPhoto(
         deps.db,
         { id: userId, firstName: ctx.from?.first_name },

@@ -111,6 +111,18 @@ export const MIGRATIONS: Migration[] = [
       "CREATE INDEX idx_orders_created ON orders (created_at)",
     ],
   },
+  {
+    id: "0009_refunds",
+    statements: [
+      // The amount actually received for the order. total_santim is the order's current value (it can go down if part is refunded).
+      "ALTER TABLE orders ADD COLUMN paid_santim INTEGER",
+      "UPDATE orders SET paid_santim = total_santim WHERE paid_santim IS NULL",
+      // One row per refund. Account details are kept only until the refund is finished, then erased.
+      "CREATE TABLE refunds (id INTEGER PRIMARY KEY AUTOINCREMENT, order_id INTEGER NOT NULL REFERENCES orders(id), customer_id INTEGER NOT NULL, amount_santim INTEGER NOT NULL CHECK (amount_santim > 0), reason TEXT NOT NULL CHECK (reason IN ('cancelled', 'unavailable', 'changed')), status TEXT NOT NULL CHECK (status IN ('awaiting_details', 'pending', 'processing', 'refunded', 'declined')), method TEXT CHECK (method IN ('cbe', 'cbe_birr')), account_name TEXT, account_number TEXT, proof_file_id TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)",
+      "CREATE INDEX idx_refunds_status ON refunds (status, id)",
+      "CREATE INDEX idx_refunds_order ON refunds (order_id)",
+    ],
+  },
 ];
 
 // Applies any migrations that have not run yet. Safe to run many times.

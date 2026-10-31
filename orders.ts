@@ -48,6 +48,14 @@ export const PAYMENT_LABEL: Record<string, string> = {
   refunded: "Refunded",
 };
 
+export const REFUND_STATUS_LABEL: Record<string, string> = {
+  awaiting_details: "Waiting for your details",
+  pending: "Pending",
+  processing: "Processing",
+  refunded: "Refunded",
+  declined: "Declined",
+};
+
 export type OrderItem = { id: number; name: string; unit: number; qty: number };
 
 export type Order = {
@@ -163,7 +171,7 @@ export function statusMessage(o: Order, status: OrderStatus): string {
     case "completed":
       return `✅ Your order ${n} has been delivered. Enjoy your meal!`;
     case "cancelled":
-      return `❌ Your order ${n} was cancelled.\n\nYour payment of ${formatEtb(o.total)} was received, so we will contact you about a refund. Refunds are not marked as done until the money has actually been sent.`;
+      return `❌ Your order ${n} was cancelled.\n\nYour payment of ${formatEtb(o.total)} was received, so we will refund it. Tap the button below to tell us where to send it. A refund is only marked as done once the money has really been sent.`;
     default:
       return `Your order ${n} is now: ${STATUS_LABEL[status]}.`;
   }
@@ -220,11 +228,18 @@ export async function handleCustomerOrders(db: Db, userId: number, data: string)
   const order = await getOrder(db, Number(m[1]));
   // Someone else's order is treated exactly like a missing one.
   if (!order || order.customerId !== userId) return { screen: await ordersScreen(db, userId), toast: "That order was not found." };
+  const refund = await db
+    .prepare("SELECT amount_santim, status FROM refunds WHERE order_id = ? ORDER BY id DESC LIMIT 1")
+    .bind(order.id)
+    .first<Row>();
+  const refundLine = refund
+    ? `\n\n💸 Refund: ${formatEtb(Number(refund.amount_santim))} — ${REFUND_STATUS_LABEL[String(refund.status)] ?? String(refund.status)}`
+    : "";
+  const buttons: Button[][] = [];
+  if (refund && String(refund.status) === "awaiting_details") buttons.push([{ text: "💸 Give refund details", data: `r:o:${order.id}` }]);
+  buttons.push([BACK_TO_ORDERS], [MAIN_MENU]);
   return {
-    screen: {
-      text: `${receiptText(order)}\n\nWe'll message you here as your order moves along.`,
-      buttons: [[BACK_TO_ORDERS], [MAIN_MENU]],
-    },
+    screen: { text: `${receiptText(order)}${refundLine}\n\nWe'll message you here as your order moves along.`, buttons },
   };
 }
 

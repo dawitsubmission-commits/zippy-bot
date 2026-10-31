@@ -41,12 +41,14 @@ const BACK_TO_ORDERS: Button = { text: "⬅ Manage Orders", data: "a:orders" };
 
 async function overview(db: Db): Promise<Screen> {
   const { results } = await db.prepare("SELECT status, COUNT(*) AS n FROM orders GROUP BY status").all<Row>();
+  const refundsOpen = Number((await db.prepare("SELECT COUNT(*) AS n FROM refunds WHERE status IN ('pending', 'processing')").first<Row>())?.n ?? 0);
   const count = (s: OrderStatus) => Number(results.find((r) => String(r.status) === s)?.n ?? 0);
   const order: OrderStatus[] = ["confirmed", "preparing", "ready", "out_for_delivery", "completed", "cancelled"];
   return {
     text: "📦 Manage Orders\n\n" + order.map((s) => `${STATUS_ICON[s]} ${STATUS_LABEL[s]}: ${count(s)}`).join("\n"),
     buttons: [
       ...order.map((s) => [{ text: `${STATUS_ICON[s]} ${STATUS_LABEL[s]} (${count(s)})`, data: `a:ol:${CODE_OF[s]}` }]),
+      [{ text: `💸 Refund requests (${refundsOpen})`, data: "a:rq" }],
       [{ text: "💳 Payments waiting to be checked", data: "a:pay" }],
       [ADMIN_PANEL_BUTTON],
     ],
@@ -209,9 +211,9 @@ export async function applyOrdersAction(db: Db, adminId: number, action: OrderAc
         // 2) create the order from the locked session (a second tap can't create a second order)
         db
           .prepare(
-            "INSERT INTO orders (session_id, customer_id, cafeteria_id, status, payment_status, method, subtotal_santim, fee_santim, total_santim, portions, items_json, customer_name, customer_phone, location_json, bank_reference, created_at, updated_at) " +
+            "INSERT INTO orders (session_id, customer_id, cafeteria_id, status, payment_status, method, subtotal_santim, fee_santim, total_santim, portions, items_json, customer_name, customer_phone, location_json, bank_reference, paid_santim, created_at, updated_at) " +
               "SELECT s.id, s.customer_id, s.cafeteria_id, 'confirmed', 'verified', s.method, s.subtotal_santim, s.fee_santim, s.total_santim, s.portions, s.items_json, s.customer_name, " +
-              "(SELECT phone FROM customers WHERE telegram_user_id = s.customer_id), s.location_json, s.bank_reference, ?, ? " +
+              "(SELECT phone FROM customers WHERE telegram_user_id = s.customer_id), s.location_json, s.bank_reference, s.total_santim, ?, ? " +
               "FROM checkout_sessions s WHERE s.id = ? AND s.status = 'under_verification' AND s.bank_reference IS NOT NULL",
           )
           .bind(now, now, action.sessionId),
@@ -301,6 +303,19 @@ export async function applyOrdersAction(db: Db, adminId: number, action: OrderAc
           "WHERE id = ? AND status = ?",
       )
       .bind(to, now, to, o.id, o.status),
+    // Cancelling a paid order creates the refund (once). The customer then gives their account details.
+    ...(to === "cancelled"
+      ? [
+          db
+            .prepare(
+              "INSERT INTO refunds (order_id, customer_id, amount_santim, reason, status, created_at, updated_at) " +
+                "SELECT o.id, o.customer_id, o.total_santim, 'cancelled', 'awaiting_details', ?, ? FROM orders o " +
+                "WHERE o.id = ? AND o.status = 'cancelled' AND o.total_santim > 0 " +
+                "AND NOT EXISTS (SELECT 1 FROM refunds r WHERE r.order_id = o.id AND r.reason = 'cancelled')",
+            )
+            .bind(now, now, o.id),
+        ]
+      : []),
   ]);
   const fresh = await getOrder(db, o.id);
   if (!fresh || fresh.status !== to) {
@@ -310,7 +325,13 @@ export async function applyOrdersAction(db: Db, adminId: number, action: OrderAc
     ok: true,
     message: `Order ${orderNumber(fresh.id)} is now ${STATUS_LABEL[to]}.`,
     screen: await detailScreen(db, fresh),
-    notify: [{ chatId: fresh.customerId, text: statusMessage(fresh, to) }],
+    notify: [
+      {
+        chatId: fresh.customerId,
+        text: statusMessage(fresh, to),
+        buttons: to === "cancelled" ? [[{ text: "💸 Give refund details", data: `r:o:${fresh.id}` }]] : undefined,
+      },
+    ],
   };
 }
 

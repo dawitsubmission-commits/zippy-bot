@@ -67,14 +67,19 @@ async function dashboard(db: Db, now: number, range: Range): Promise<Screen> {
         "COALESCE(SUM(status NOT IN ('completed', 'cancelled')), 0) AS active, COUNT(DISTINCT customer_id) AS customers, " +
         "COALESCE(SUM(CASE WHEN status != 'cancelled' THEN subtotal_santim ELSE 0 END), 0) AS food, " +
         "COALESCE(SUM(CASE WHEN status != 'cancelled' THEN fee_santim ELSE 0 END), 0) AS fees, " +
-        "COALESCE(SUM(total_santim), 0) AS received, " +
-        "COALESCE(SUM(CASE WHEN payment_status = 'refund_pending' THEN total_santim ELSE 0 END), 0) AS refund_pending, " +
-        "COALESCE(SUM(CASE WHEN payment_status = 'refunded' THEN total_santim ELSE 0 END), 0) AS refunded " +
+        "COALESCE(SUM(COALESCE(paid_santim, total_santim)), 0) AS received " +
         "FROM orders WHERE created_at >= ?",
     )
     .bind(start)
     .first<Row>();
   const waiting = await count(db, "SELECT COUNT(*) AS n FROM checkout_sessions WHERE status = 'under_verification'");
+  const rf = await db
+    .prepare(
+      "SELECT COALESCE(SUM(CASE WHEN status IN ('awaiting_details', 'pending', 'processing') THEN amount_santim ELSE 0 END), 0) AS owed, " +
+        "COALESCE(SUM(CASE WHEN status = 'refunded' THEN amount_santim ELSE 0 END), 0) AS sent FROM refunds WHERE created_at >= ?",
+    )
+    .bind(start)
+    .first<Row>();
 
   const text = [
     `📊 Dashboard — ${RANGE_LABEL[range]}`,
@@ -89,8 +94,8 @@ async function dashboard(db: Db, now: number, range: Range): Promise<Screen> {
     `Food sales (cancelled orders left out): ${formatEtb(num(o, "food"))}`,
     `Delivery fees (cancelled orders left out): ${formatEtb(num(o, "fees"))}`,
     `Verified payments received: ${formatEtb(num(o, "received"))}`,
-    `Refunds pending: ${formatEtb(num(o, "refund_pending"))}`,
-    `Refunded: ${formatEtb(num(o, "refunded"))}`,
+    `Refunds owed, not sent yet: ${formatEtb(num(rf, "owed"))}`,
+    `Refunds sent: ${formatEtb(num(rf, "sent"))}`,
     "",
     "These are totals recorded by the bot. They are not profit, and they don't replace your bank statement.",
   ].join("\n");

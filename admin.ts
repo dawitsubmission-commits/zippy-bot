@@ -4,6 +4,7 @@
 
 import { formatEtb } from "./cart";
 import { applyHoursAction, handleHoursCallback, handleHoursText, isHoursAction, isHoursStep } from "./admin-hours";
+import { applyRefundsAction, handleRefundsCallback, handleRefundsText, isRefundsAction, isRefundsStep } from "./admin-refunds";
 import { applyCustomersAction, handleCustomersCallback, handleCustomersText, isCustomersAction, isCustomersStep } from "./admin-customers";
 import { applyOrdersAction, handleOrdersCallback, isOrdersAction } from "./admin-orders";
 import { applyPaymentsAction, handlePaymentsCallback, handlePaymentsText, isPaymentsAction, isPaymentsStep } from "./admin-payments";
@@ -320,6 +321,9 @@ export async function handleAdmin(db: Db, adminId: number, data: string, now: nu
   // Dashboard, statistics, customers and reports live in admin-customers.ts.
   const customersResult = await handleCustomersCallback(db, adminId, data, now);
   if (customersResult) return customersResult;
+  // Refund requests live in admin-refunds.ts.
+  const refundsResult = await handleRefundsCallback(db, adminId, data, now);
+  if (refundsResult) return refundsResult;
 
   const m = /^a:(mc|mi|en|ep|tg|ar|af|cf|cs):(\d{1,9})$/.exec(data);
   if (!m && !SIMPLE.has(data)) return null;
@@ -372,7 +376,9 @@ export async function handleAdmin(db: Db, adminId: number, data: string, now: nu
           ? await applyOrdersAction(db, adminId, state.action, now)
           : isCustomersAction(state.action)
             ? await applyCustomersAction(db, adminId, state.action, now)
-            : await applyAction(db, adminId, state.action, now);
+            : isRefundsAction(state.action)
+              ? await applyRefundsAction(db, adminId, state.action, now)
+              : await applyAction(db, adminId, state.action, now);
     return { screen: outcome.screen, toast: outcome.message, alert: !outcome.ok, notify: outcome.notify, document: outcome.document };
   }
 
@@ -469,6 +475,7 @@ export async function handleAdminText(db: Db, adminId: number, text: string, now
   if (isHoursStep(state.step)) return handleHoursText(db, adminId, state, text, now);
   if (isPaymentsStep(state.step)) return handlePaymentsText(db, adminId, state, text, now);
   if (isCustomersStep(state.step)) return handleCustomersText(db, adminId, state, text);
+  if (isRefundsStep(state.step)) return handleRefundsText(db, adminId, state);
 
   if (state.step === "price") {
     const item = await getItem(db, state.itemId);
