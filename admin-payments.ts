@@ -99,6 +99,7 @@ async function detailScreen(db: Db, id: number): Promise<Screen | null> {
   const text = [
     `💳 Payment #${s.id} · ${METHODS[s.method].label}`,
     `Status: ${s.status.replaceAll("_", " ")}`,
+    s.orderId !== null ? `Top-up: the difference for order ZP-${String(s.orderId).padStart(4, "0")}` : "",
     "",
     `Customer: ${s.name}`,
     c?.phone ? `Phone: ${c.phone}` : "Phone: not shared",
@@ -107,7 +108,7 @@ async function detailScreen(db: Db, id: number): Promise<Screen | null> {
     `Items: ${itemsText(s.items)}`,
     `Food subtotal: ${formatEtb(s.subtotal)}`,
     `Delivery fee: ${formatEtb(s.fee)}`,
-    `Total expected: ${formatEtb(s.total)}`,
+    s.orderId !== null ? `Difference to pay: ${formatEtb(s.total)}` : `Total expected: ${formatEtb(s.total)}`,
     "",
     displayReference(s.bankReference) ? `Bank reference: ${displayReference(s.bankReference)}` : "",
     s.submittedAt ? `Submitted: ${etTimeFromEpoch(s.submittedAt)}` : "",

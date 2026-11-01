@@ -123,6 +123,16 @@ export const MIGRATIONS: Migration[] = [
       "CREATE INDEX idx_refunds_order ON refunds (order_id)",
     ],
   },
+  {
+    id: "0010_changes",
+    statements: [
+      // An order waiting for the customer to decide what to do about an unavailable item.
+      "ALTER TABLE orders ADD COLUMN needs_action INTEGER NOT NULL DEFAULT 0",
+      "ALTER TABLE orders ADD COLUMN missing_json TEXT",
+      // A payment attempt that pays the DIFFERENCE for an existing order (instead of creating a new order).
+      "ALTER TABLE checkout_sessions ADD COLUMN order_id INTEGER",
+    ],
+  },
 ];
 
 // Applies any migrations that have not run yet. Safe to run many times.

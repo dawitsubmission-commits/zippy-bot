@@ -35,7 +35,8 @@ export type PaymentAction =
 export type OrderAction =
   | { type: "pay_verify"; sessionId: number }
   | { type: "pay_reject"; sessionId: number; reason: string }
-  | { type: "order_status"; orderId: number; from: string; to: string };
+  | { type: "order_status"; orderId: number; from: string; to: string }
+  | { type: "order_missing"; orderId: number; itemId: number };
 
 // Exporting the customer list (see admin-customers.ts).
 export type CustomersAction = { type: "export_customers" };

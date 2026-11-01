@@ -10,6 +10,7 @@ import {
 import type { Db } from "./db";
 import { etTimeFromEpoch } from "./schedule-text";
 import { getOrderingStatus } from "./schedule";
+import type { Order, OrderItem } from "./orders";
 import { CB, type Button, type Screen } from "./screens";
 import { currentCartScreen, getFeePerPortion, loadCart } from "./store";
 
@@ -56,6 +57,7 @@ export type Session = {
   expiresAt: number;
   bankReference: string | null;
   submittedAt: number | null;
+  orderId: number | null; // set when this payment is the DIFFERENCE for an existing order
 };
 
 function toSession(r: Row): Session {
@@ -87,6 +89,7 @@ function toSession(r: Row): Session {
     expiresAt: Number(r.expires_at),
     bankReference: r.bank_reference === null ? null : String(r.bank_reference),
     submittedAt: r.submitted_at === null ? null : Number(r.submitted_at),
+    orderId: r.order_id === null || r.order_id === undefined ? null : Number(r.order_id),
   };
 }
 
@@ -96,7 +99,7 @@ export async function getSession(db: Db, id: number): Promise<Session | null> {
 }
 
 // The customer's payment attempt that is still open (waiting for them, or waiting for the admin).
-async function openSession(db: Db, customerId: number, now: number): Promise<Session | null> {
+export async function openSession(db: Db, customerId: number, now: number): Promise<Session | null> {
   // An attempt the customer never completed simply runs out.
   await db
     .prepare("UPDATE checkout_sessions SET status = 'expired' WHERE customer_id = ? AND status = 'awaiting_payment' AND expires_at <= ?")
@@ -125,7 +128,9 @@ function waitingScreen(s: Session): Screen {
   return {
     text:
       `⏳ Your payment is being checked\n\nAmount: ${formatEtb(s.total)} (${s.method === "cbe" ? "CBE" : "CBE Birr"})\n\n` +
-      "Your order is not confirmed yet. We'll message you as soon as we have checked the payment.",
+      (s.orderId !== null
+        ? "Your order will be updated as soon as we have checked the payment."
+        : "Your order is not confirmed yet. We'll message you as soon as we have checked the payment."),
     buttons: [[MAIN_MENU]],
   };
 }
@@ -143,11 +148,12 @@ async function methodScreen(db: Db, total: number): Promise<Screen> {
   return { text: `💳 How would you like to pay?\n\nTotal: ${formatEtb(total)}`, buttons };
 }
 
-function instructionsScreen(s: Session, instructions: string): Screen {
+export function instructionsScreen(s: Session, instructions: string): Screen {
   return {
     text: [
       `${METHODS[s.method].button.slice(0, 2)} Pay with ${METHODS[s.method].label}`,
       "",
+      s.orderId !== null ? `This pays the difference for your order ZP-${String(s.orderId).padStart(4, "0")}.` : "",
       `Amount to pay: ${formatEtb(s.total)}`,
       "",
       instructions,
@@ -192,6 +198,31 @@ async function createSession(db: Db, user: User, method: Method, now: number): P
     return { ok: false, result: { toast: "Something went wrong. Please try again.", alert: true } };
   }
   return { ok: true, session };
+}
+
+// A payment attempt for the DIFFERENCE on an existing order (the new order content is locked in the session).
+export async function createTopupSession(
+  db: Db,
+  user: User,
+  order: Order,
+  change: { items: OrderItem[]; subtotal: number; fee: number; portions: number; delta: number },
+  method: Method,
+  now: number,
+): Promise<Session | null> {
+  await db.batch([
+    db.prepare("UPDATE checkout_sessions SET status = 'cancelled' WHERE customer_id = ? AND status = 'awaiting_payment'").bind(user.id),
+    db
+      .prepare(
+        "INSERT INTO checkout_sessions (customer_id, cafeteria_id, method, status, subtotal_santim, fee_santim, total_santim, portions, items_json, customer_name, location_json, created_at, expires_at, order_id) " +
+          "VALUES (?, ?, ?, 'awaiting_payment', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      )
+      .bind(
+        user.id, order.cafeteriaId, method, change.subtotal, change.fee, change.delta, change.portions,
+        JSON.stringify(change.items), order.name, order.locationJson, now, now + SESSION_SECONDS, order.id,
+      ),
+  ]);
+  const session = await openSession(db, user.id, now);
+  return session && session.status === "awaiting_payment" ? session : null;
 }
 
 // ---------- buttons ----------
@@ -278,9 +309,9 @@ export async function handlePaymentPhoto(
     return { screen: { text: "This payment attempt has closed. Your cart is saved. Start again from your cart.", buttons: [[{ text: "🛒 View Cart", data: "v:cart" }]] } };
   }
 
-  // The opening hours apply when the evidence is handed in.
+  // The opening hours apply when the evidence is handed in (not for paying the difference on an order that is already confirmed).
   const status = await getOrderingStatus(db, now);
-  if (!status.open) {
+  if (!status.open && session.orderId === null) {
     return {
       screen: {
         text: "Ordering has closed, so we can't take this payment for an order right now. Your cart is saved.\n\nIf you already paid, please contact ZIPPY.",
@@ -314,7 +345,7 @@ export async function handlePaymentPhoto(
   const submitted = (await getSession(db, session.id)) ?? session;
   const customer = await getCustomer(db, user.id);
   const caption = [
-    "💳 New payment to verify",
+    session.orderId !== null ? `💳 New payment to verify (difference for order ZP-${String(session.orderId).padStart(4, "0")})` : "💳 New payment to verify",
     `Payment #${submitted.id} · ${METHODS[submitted.method].label}`,
     `Customer: ${submitted.name}`,
     customer?.phone ? `Phone: ${customer.phone}` : "",

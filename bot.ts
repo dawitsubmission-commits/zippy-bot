@@ -5,6 +5,7 @@ import { recordUser } from "./admin-customers";
 import { clearState, getState as getAdminState } from "./admin-state";
 import { handleRefundProof } from "./admin-refunds";
 import { handleCustomerOrders } from "./orders";
+import { handleChangeCallback } from "./changes";
 import { handleRefundCallback, handleRefundText } from "./refunds";
 import { handlePaymentCallback, handlePaymentPhoto, handlePaymentText } from "./payment";
 import { handleCheckoutCallback, handleCheckoutText, handleContact, startCheckout, type FlowResult } from "./checkout";
@@ -212,6 +213,7 @@ export function createBot(deps: BotDeps): Bot {
       const flow =
         (await handlePaymentCallback(deps.db, user, data, now)) ??
         (await handleRefundCallback(deps.db, user, data, now)) ??
+        (await handleChangeCallback(deps.db, user, data, now)) ??
         (await handleCheckoutCallback(deps.db, user, data, now));
       if (flow) {
         if (flow.askContact) {

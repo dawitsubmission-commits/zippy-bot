@@ -5,7 +5,7 @@
 // - Manage Orders: move an order along its allowed statuses; the customer is told each time.
 
 import {
-  ADMIN_PANEL_BUTTON, clearState, confirmScreen, setState,
+  ADMIN_PANEL_BUTTON, AUDIT_SQL, clearState, confirmScreen, setState,
   type Notify, type OrderAction, type Outcome,
 } from "./admin-state";
 import { overviewScreen } from "./admin-payments";
@@ -19,7 +19,7 @@ type Row = Record<string, unknown>;
 export type OrdersResult = { screen?: Screen; toast?: string; alert?: boolean; notify?: Notify[] };
 
 export const isOrdersAction = (action: { type: string }): action is OrderAction =>
-  action.type === "pay_verify" || action.type === "pay_reject" || action.type === "order_status";
+  action.type === "pay_verify" || action.type === "pay_reject" || action.type === "order_status" || action.type === "order_missing";
 
 const STATUS_CODE: Record<string, OrderStatus> = {
   c: "confirmed", p: "preparing", r: "ready", o: "out_for_delivery", d: "completed", x: "cancelled",
@@ -89,6 +89,9 @@ async function detailScreen(db: Db, o: Order): Promise<Screen> {
   const text = [
     `${STATUS_ICON[o.status]} Order ${orderNumber(o.id)} — ${STATUS_LABEL[o.status]}`,
     `Payment: ${METHODS[o.method].label} — ${PAYMENT_LABEL[o.paymentStatus] ?? o.paymentStatus}`,
+    ...(o.needsAction
+      ? [`⚠️ Waiting for the customer to decide (unavailable: ${o.items.filter((i) => o.missingIds.includes(i.id)).map((i) => i.name).join(", ")})`]
+      : []),
     "",
     `Customer: ${o.name}`,
     `Phone: ${o.phone ?? "not shared"}`,
@@ -105,8 +108,13 @@ async function detailScreen(db: Db, o: Order): Promise<Screen> {
   ].join("\n");
 
   const buttons: Button[][] = [];
-  const next = ALLOWED[o.status].find((s) => s !== "cancelled");
-  if (next) buttons.push([{ text: NEXT_BUTTON[o.status] ?? STATUS_LABEL[next], data: `a:os:${o.id}:${CODE_OF[next]}` }]);
+  if (o.needsAction) {
+    buttons.push([{ text: "↩️ Item is available after all", data: `a:oz:${o.id}` }]);
+  } else {
+    const next = ALLOWED[o.status].find((s) => s !== "cancelled");
+    if (next) buttons.push([{ text: NEXT_BUTTON[o.status] ?? STATUS_LABEL[next], data: `a:os:${o.id}:${CODE_OF[next]}` }]);
+    if (["confirmed", "preparing", "ready"].includes(o.status)) buttons.push([{ text: "⚠️ Item unavailable", data: `a:ox:${o.id}` }]);
+  }
   if (ALLOWED[o.status].includes("cancelled")) buttons.push([{ text: "❌ Cancel order", data: `a:os:${o.id}:x` }]);
   buttons.push([{ text: "📞 Contact customer", data: "x:noop", url: `tg://user?id=${o.customerId}` }]);
   buttons.push([{ text: `⬅ ${STATUS_LABEL[o.status]} orders`, data: `a:ol:${CODE_OF[o.status]}` }]);
@@ -135,6 +143,9 @@ export async function handleOrdersCallback(db: Db, adminId: number, data: string
     const o = await getOrder(db, Number(m[1]));
     if (!o) return { screen: await overview(db), toast: "That order was not found." };
     const to = STATUS_CODE[m[2]];
+    if (o.needsAction && to !== "cancelled") {
+      return { screen: await detailScreen(db, o), toast: "Waiting for the customer's decision about the unavailable item.", alert: true };
+    }
     if (!ALLOWED[o.status].includes(to)) {
       return { screen: await detailScreen(db, o), toast: "That change isn't allowed from the current status.", alert: true };
     }
@@ -153,6 +164,62 @@ export async function handleOrdersCallback(db: Db, adminId: number, data: string
     return { screen: outcome.screen, toast: outcome.message, alert: !outcome.ok, notify: outcome.notify };
   }
 
+  m = /^a:ox:(\d{1,9})$/.exec(data);
+  if (m) {
+    const o = await getOrder(db, Number(m[1]));
+    if (!o) return { screen: await overview(db), toast: "That order was not found." };
+    if (o.needsAction || !["confirmed", "preparing", "ready"].includes(o.status)) {
+      return { screen: await detailScreen(db, o), toast: "You can't mark an item on this order right now.", alert: true };
+    }
+    return {
+      screen: {
+        text: `Which item of order ${orderNumber(o.id)} is unavailable?`,
+        buttons: [...o.items.map((i) => [{ text: `${i.qty} × ${i.name}`, data: `a:oy:${o.id}:${i.id}` }]), [{ text: "⬅ Back", data: `a:oo:${o.id}` }]],
+      },
+    };
+  }
+
+  m = /^a:oy:(\d{1,9}):(\d{1,9})$/.exec(data);
+  if (m) {
+    const o = await getOrder(db, Number(m[1]));
+    const item = o?.items.find((i) => i.id === Number(m![2]));
+    if (!o || !item || o.needsAction || !["confirmed", "preparing", "ready"].includes(o.status)) {
+      return { screen: o ? await detailScreen(db, o) : await overview(db), toast: "Nothing can be changed here now.", alert: true };
+    }
+    await setState(db, adminId, { step: "confirm", action: { type: "order_missing", orderId: o.id, itemId: item.id } }, now);
+    return {
+      screen: confirmScreen(
+        `Tell ${o.name} that ${item.name} is unavailable for order ${orderNumber(o.id)}?\n\nThey will be asked to change the order, request a refund, or contact you. The order stays on hold until they answer.`,
+      ),
+    };
+  }
+
+  m = /^a:oz:(\d{1,9})$/.exec(data);
+  if (m) {
+    const o = await getOrder(db, Number(m[1]));
+    if (!o || !o.needsAction) return { screen: o ? await detailScreen(db, o) : await overview(db), toast: "Nothing is on hold for this order." };
+    const topup = await db
+      .prepare("SELECT id FROM checkout_sessions WHERE order_id = ? AND status IN ('awaiting_payment', 'under_verification')")
+      .bind(o.id)
+      .first();
+    if (topup) {
+      return { screen: await detailScreen(db, o), toast: "The customer is paying for a change. Wait until that payment is checked.", alert: true };
+    }
+    await db.batch([
+      db
+        .prepare(AUDIT_SQL + "SELECT ?, ?, 'order.item_available_again', ?, '{}' WHERE EXISTS (SELECT 1 FROM orders WHERE id = ? AND needs_action = 1)")
+        .bind(now, adminId, `order:${o.id}`, o.id),
+      db.prepare("UPDATE orders SET needs_action = 0, missing_json = NULL, updated_at = ? WHERE id = ? AND needs_action = 1").bind(now, o.id),
+    ]);
+    const fresh = await getOrder(db, o.id);
+    if (!fresh || fresh.needsAction) return { screen: await detailScreen(db, o), toast: "Nothing was changed.", alert: true };
+    return {
+      screen: await detailScreen(db, fresh),
+      toast: "Order released.",
+      notify: [{ chatId: fresh.customerId, text: `✅ Good news: everything in your order ${orderNumber(fresh.id)} is available after all. Nothing for you to do.` }],
+    };
+  }
+
   m = /^a:pv:(\d{1,9})$/.exec(data);
   if (m) {
     const s = await getSession(db, Number(m[1]));
@@ -161,7 +228,7 @@ export async function handleOrdersCallback(db: Db, adminId: number, data: string
     return {
       screen: confirmScreen(
         `Confirm payment #${s.id}?\n\nOnly confirm if you have checked your REAL ${METHODS[s.method].label} account and ${formatEtb(s.total)} has arrived${displayReference(s.bankReference) ? ` (reference ${displayReference(s.bankReference)})` : ""}.\n\n` +
-          `This creates the order for ${s.name}.`,
+          (s.orderId !== null ? `This updates order ${orderNumber(s.orderId)} for ${s.name}.` : `This creates the order for ${s.name}.`),
       ),
     };
   }
@@ -197,10 +264,87 @@ export async function handleOrdersCallback(db: Db, adminId: number, data: string
 // ---------- applying a confirmed change (all or nothing) ----------
 
 export async function applyOrdersAction(db: Db, adminId: number, action: OrderAction, now: number): Promise<Outcome> {
+  if (action.type === "order_missing") {
+    const o = await getOrder(db, action.orderId);
+    const item = o?.items.find((i) => i.id === action.itemId);
+    if (!o || !item || o.needsAction || !["confirmed", "preparing", "ready"].includes(o.status)) {
+      return { ok: false, message: "Nothing was changed.", screen: o ? await detailScreen(db, o) : await overview(db) };
+    }
+    await db.batch([
+      db
+        .prepare(AUDIT_SQL + "SELECT ?, ?, 'order.item_unavailable', ?, ? WHERE EXISTS (SELECT 1 FROM orders WHERE id = ? AND needs_action = 0 AND status IN ('confirmed', 'preparing', 'ready'))")
+        .bind(now, adminId, `order:${o.id}`, JSON.stringify({ item: item.name }), o.id),
+      db
+        .prepare("UPDATE orders SET needs_action = 1, missing_json = ?, updated_at = ? WHERE id = ? AND needs_action = 0 AND status IN ('confirmed', 'preparing', 'ready')")
+        .bind(JSON.stringify([item.id]), now, o.id),
+    ]);
+    const fresh = await getOrder(db, o.id);
+    if (!fresh || !fresh.needsAction) return { ok: false, message: "Nothing was changed.", screen: await detailScreen(db, o) };
+    return {
+      ok: true,
+      message: `${item.name} marked unavailable. The customer was asked what to do.`,
+      screen: await detailScreen(db, fresh),
+      notify: [
+        {
+          chatId: fresh.customerId,
+          text: `⚠️ Sorry, ${item.name} isn't available for your order ${orderNumber(fresh.id)}.\n\nWhat would you like to do?`,
+          buttons: [
+            [{ text: "✏️ Change My Order", data: `chr:${fresh.id}` }],
+            [{ text: "💸 Request Refund", data: `chu:${fresh.id}` }],
+            [{ text: "📞 Contact Admin", data: `chh:${fresh.id}` }],
+          ],
+        },
+      ],
+    };
+  }
+
   if (action.type === "pay_verify") {
     const before = await getSession(db, action.sessionId);
     if (!before || before.status !== "under_verification") {
       return { ok: false, message: "That payment was already handled. Nothing was changed.", screen: await overviewScreen(db) };
+    }
+    if (before.orderId !== null) {
+      // The difference for an existing order: update that order instead of creating a new one.
+      const sid = action.sessionId;
+      try {
+        await db.batch([
+          db
+            .prepare(
+              "INSERT INTO payment_events (session_id, event, actor_telegram_id, reason, at) SELECT ?, 'verified', ?, '', ? " +
+                "WHERE EXISTS (SELECT 1 FROM checkout_sessions WHERE id = ? AND status = 'under_verification') " +
+                "AND EXISTS (SELECT 1 FROM orders WHERE id = ? AND needs_action = 1)",
+            )
+            .bind(sid, adminId, now, sid, before.orderId),
+          db
+            .prepare(
+              "UPDATE orders SET items_json = (SELECT items_json FROM checkout_sessions WHERE id = ?), " +
+                "subtotal_santim = (SELECT subtotal_santim FROM checkout_sessions WHERE id = ?), fee_santim = (SELECT fee_santim FROM checkout_sessions WHERE id = ?), " +
+                "portions = (SELECT portions FROM checkout_sessions WHERE id = ?), total_santim = (SELECT subtotal_santim + fee_santim FROM checkout_sessions WHERE id = ?), " +
+                "paid_santim = COALESCE(paid_santim, total_santim) + (SELECT total_santim FROM checkout_sessions WHERE id = ?), needs_action = 0, missing_json = NULL, updated_at = ? " +
+                "WHERE id = ? AND needs_action = 1 AND EXISTS (SELECT 1 FROM checkout_sessions WHERE id = ? AND status = 'under_verification')",
+            )
+            .bind(sid, sid, sid, sid, sid, sid, now, before.orderId, sid),
+          db
+            .prepare(
+              "UPDATE checkout_sessions SET status = 'verified' WHERE id = ? AND status = 'under_verification' " +
+                "AND EXISTS (SELECT 1 FROM orders o WHERE o.id = ? AND o.needs_action = 0 AND o.items_json = (SELECT items_json FROM checkout_sessions WHERE id = ?))",
+            )
+            .bind(sid, before.orderId, sid),
+        ]);
+      } catch {
+        return { ok: false, message: "Something went wrong. Nothing was changed.", screen: await overviewScreen(db) };
+      }
+      const updated = await getOrder(db, before.orderId);
+      const afterSession = await getSession(db, sid);
+      if (!updated || !afterSession || afterSession.status !== "verified") {
+        return { ok: false, message: "Nothing was changed. (Was the order released in the meantime?)", screen: await overviewScreen(db) };
+      }
+      return {
+        ok: true,
+        message: `Payment confirmed. Order ${orderNumber(updated.id)} updated.`,
+        screen: await detailScreen(db, updated),
+        notify: [{ chatId: updated.customerId, text: `✅ Payment confirmed! Your order ${orderNumber(updated.id)} has been updated.\n\n${receiptText(updated)}` }],
+      };
     }
     try {
       await db.batch([

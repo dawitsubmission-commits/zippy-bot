@@ -60,6 +60,11 @@ export type OrderItem = { id: number; name: string; unit: number; qty: number };
 
 export type Order = {
   id: number;
+  cafeteriaId: number;
+  itemsJson: string;
+  locationJson: string;
+  needsAction: boolean;
+  missingIds: number[];
   sessionId: number;
   customerId: number;
   cafeteriaName: string;
@@ -100,8 +105,20 @@ function toOrder(r: Row): Order {
   } catch {
     // keep "(unknown)"
   }
+  let missingIds: number[] = [];
+  try {
+    const parsed = r.missing_json === null || r.missing_json === undefined ? [] : JSON.parse(String(r.missing_json));
+    missingIds = Array.isArray(parsed) ? parsed.map(Number).filter((n) => Number.isInteger(n)) : [];
+  } catch {
+    missingIds = [];
+  }
   return {
     id: Number(r.id),
+    cafeteriaId: Number(r.cafeteria_id),
+    itemsJson: String(r.items_json),
+    locationJson: String(r.location_json),
+    needsAction: Number(r.needs_action) === 1,
+    missingIds,
     sessionId: Number(r.session_id),
     customerId: Number(r.customer_id),
     cafeteriaName: String(r.cafeteria_name),
@@ -155,7 +172,10 @@ export function receiptText(o: Order): string {
     `Deliver to: ${o.location}`,
     `Payment: ${METHODS[o.method].label} — ${PAYMENT_LABEL[o.paymentStatus] ?? o.paymentStatus}`,
     `Order status: ${STATUS_ICON[o.status]} ${STATUS_LABEL[o.status]}`,
-  ].join("\n");
+    o.needsAction ? "\n⚠️ An item is unavailable. Please choose what to do (see the button below)." : "",
+  ]
+    .filter((l, i, all) => l !== "" || (i > 0 && all[i - 1] !== ""))
+    .join("\n");
 }
 
 // What the customer is told when their order moves along.
@@ -236,6 +256,7 @@ export async function handleCustomerOrders(db: Db, userId: number, data: string)
     ? `\n\n💸 Refund: ${formatEtb(Number(refund.amount_santim))} — ${REFUND_STATUS_LABEL[String(refund.status)] ?? String(refund.status)}`
     : "";
   const buttons: Button[][] = [];
+  if (order.needsAction) buttons.push([{ text: "⚠️ Choose what to do", data: `ch:${order.id}` }]);
   if (refund && String(refund.status) === "awaiting_details") buttons.push([{ text: "💸 Give refund details", data: `r:o:${order.id}` }]);
   buttons.push([BACK_TO_ORDERS], [MAIN_MENU]);
   return {
