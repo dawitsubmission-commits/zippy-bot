@@ -46,7 +46,14 @@ export type RefundAction =
   | { type: "refund_done"; refundId: number; proofFileId: string }
   | { type: "refund_decline"; refundId: number };
 
-export type PendingAction = BasicAction | HoursAction | PaymentAction | OrderAction | CustomersAction | RefundAction;
+// Wallet changes (see admin-wallet.ts).
+export type WalletAction =
+  | { type: "wallet_mode"; mode: "off" | "test" }
+  | { type: "deposit_verify"; depositId: number }
+  | { type: "deposit_reject"; depositId: number; reason: string }
+  | { type: "wallet_adjust"; customerId: number; direction: "credit" | "debit"; amount: number; reason: string; key: string };
+
+export type PendingAction = BasicAction | HoursAction | PaymentAction | OrderAction | CustomersAction | RefundAction | WalletAction;
 
 export type AdminState =
   | { step: "price"; itemId: number }
@@ -62,11 +69,14 @@ export type AdminState =
   | { step: "pay_instr"; method: "cbe" | "cbe_birr" }
   | { step: "cust_search" }
   | { step: "refund_proof"; refundId: number }
+  | { step: "wallet_search" }
+  | { step: "wallet_adj_amount"; customerId: number; direction: "credit" | "debit" }
+  | { step: "wallet_adj_reason"; customerId: number; direction: "credit" | "debit"; amount: number }
   | { step: "confirm"; action: PendingAction };
 
 const STEPS = [
   "price", "name", "new_name", "new_price", "fee",
-  "win_open_time", "win_open_period", "win_close_time", "win_close_period", "closure_date", "pay_instr", "cust_search", "refund_proof", "confirm",
+  "win_open_time", "win_open_period", "win_close_time", "win_close_period", "closure_date", "pay_instr", "cust_search", "refund_proof", "wallet_search", "wallet_adj_amount", "wallet_adj_reason", "confirm",
 ];
 
 export async function getState(db: Db, adminId: number, now: number): Promise<AdminState | null> {

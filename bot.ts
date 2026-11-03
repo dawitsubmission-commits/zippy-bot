@@ -6,6 +6,7 @@ import { clearState, getState as getAdminState } from "./admin-state";
 import { handleRefundProof } from "./admin-refunds";
 import { handleCustomerOrders } from "./orders";
 import { handleChangeCallback } from "./changes";
+import { handleWalletCallback, handleWalletPhoto, handleWalletText } from "./wallet";
 import { handleRefundCallback, handleRefundText } from "./refunds";
 import { handlePaymentCallback, handlePaymentPhoto, handlePaymentText } from "./payment";
 import { handleCheckoutCallback, handleCheckoutText, handleContact, startCheckout, type FlowResult } from "./checkout";
@@ -245,6 +246,11 @@ export function createBot(deps: BotDeps): Bot {
         await respond(ctx, orders);
         return;
       }
+      const wallet = await handleWalletCallback(deps.db, user, data, now);
+      if (wallet) {
+        await respond(ctx, wallet);
+        return;
+      }
     } catch (err) {
       console.error("zippy shop error:", safeError(err));
       await ctx.answerCallbackQuery({ text: "Something went wrong. Please try again." });
@@ -292,6 +298,11 @@ export function createBot(deps: BotDeps): Bot {
           await sendFlow(ctx, refundFlow);
           return;
         }
+        const walletFlow = await handleWalletText(deps.db, who, ctx.message.text, nowSeconds);
+        if (walletFlow) {
+          await sendFlow(ctx, walletFlow);
+          return;
+        }
         const flow = await handleCheckoutText(deps.db, who, ctx.message.text, nowSeconds);
         if (flow) {
           await sendFlow(ctx, flow);
@@ -336,12 +347,11 @@ export function createBot(deps: BotDeps): Bot {
           return;
         }
       }
-      const flow = await handlePaymentPhoto(
-        deps.db,
-        { id: userId, firstName: ctx.from?.first_name },
-        { fileId: best.file_id, uniqueId: best.file_unique_id },
-        Math.floor(Date.now() / 1000),
-      );
+      const who = { id: userId, firstName: ctx.from?.first_name };
+      const picture = { fileId: best.file_id, uniqueId: best.file_unique_id };
+      const stamp = Math.floor(Date.now() / 1000);
+      // A wallet deposit receipt, or else a payment receipt for an order.
+      const flow = (await handleWalletPhoto(deps.db, who, picture, stamp)) ?? (await handlePaymentPhoto(deps.db, who, picture, stamp));
       if (flow.screen) await sendFlow(ctx, flow);
       else if (flow.toast) await ctx.reply(flow.toast);
       if (flow.notify) {

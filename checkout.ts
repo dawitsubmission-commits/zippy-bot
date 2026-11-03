@@ -107,11 +107,14 @@ type CState =
   | { step: "pay_photo"; sessionId: number }
   | { step: "refund_name"; refundId: number; method: "cbe" | "cbe_birr" }
   | { step: "refund_number"; refundId: number; method: "cbe" | "cbe_birr"; name: string }
-  | { step: "refund_confirm"; refundId: number; method: "cbe" | "cbe_birr"; name: string; number: string };
+  | { step: "refund_confirm"; refundId: number; method: "cbe" | "cbe_birr"; name: string; number: string }
+  | { step: "wd_amount" }
+  | { step: "wd_method"; amount: number }
+  | { step: "wd_photo"; depositId: number };
 
 export type { CState };
 
-const CSTEPS = ["name", "phone", "dorm", "floor", "detail", "loc_confirm", "pay_ref", "pay_photo", "refund_name", "refund_number", "refund_confirm"];
+const CSTEPS = ["name", "phone", "dorm", "floor", "detail", "loc_confirm", "pay_ref", "pay_photo", "refund_name", "refund_number", "refund_confirm", "wd_amount", "wd_method", "wd_photo"];
 
 export async function getState(db: Db, id: number, now: number): Promise<CState | null> {
   const row = await db.prepare("SELECT data, updated_at FROM customer_state WHERE telegram_user_id = ?").bind(id).first<Row>();
@@ -375,6 +378,7 @@ export async function handleCheckoutText(db: Db, user: User, text: string, now: 
   if (!state) return null;
   if (state.step === "pay_ref" || state.step === "pay_photo") return null; // handled by payment.ts
   if (state.step === "refund_name" || state.step === "refund_number" || state.step === "refund_confirm") return null; // handled by refunds.ts
+  if (state.step === "wd_amount" || state.step === "wd_method" || state.step === "wd_photo") return null; // handled by wallet.ts
 
   const problem = await stillAllowed(db, user, now);
   if (problem) {

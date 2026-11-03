@@ -133,6 +133,27 @@ export const MIGRATIONS: Migration[] = [
       "ALTER TABLE checkout_sessions ADD COLUMN order_id INTEGER",
     ],
   },
+  {
+    id: "0011_wallet",
+    statements: [
+      // The wallet is OFF by default. "test" uses SIMULATED funds only. "live" (real money) stays locked until written legal clearance.
+      "INSERT INTO settings (key, value) VALUES ('wallet_mode', 'off')",
+      // Separate switches for real money (used only in live mode, in later steps). All off.
+      "INSERT INTO settings (key, value) VALUES ('wallet_deposits_live', '0')",
+      "INSERT INTO settings (key, value) VALUES ('wallet_payments_live', '0')",
+      "INSERT INTO settings (key, value) VALUES ('wallet_withdrawals_live', '0')",
+      // One wallet per customer per kind (simulated or real). The database itself refuses a negative balance.
+      "CREATE TABLE wallets (customer_id INTEGER NOT NULL, simulated INTEGER NOT NULL CHECK (simulated IN (0, 1)), available_santim INTEGER NOT NULL DEFAULT 0 CHECK (available_santim >= 0), reserved_santim INTEGER NOT NULL DEFAULT 0 CHECK (reserved_santim >= 0), created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, PRIMARY KEY (customer_id, simulated))",
+      // The ledger: rows are only ever added, never edited. The idempotency key makes every operation happen at most once.
+      "CREATE TABLE wallet_ledger (id INTEGER PRIMARY KEY AUTOINCREMENT, customer_id INTEGER NOT NULL, simulated INTEGER NOT NULL CHECK (simulated IN (0, 1)), type TEXT NOT NULL CHECK (type IN ('deposit', 'order_payment', 'order_refund', 'withdrawal_reserve', 'withdrawal_release', 'withdrawal_complete', 'withdrawal_fee', 'adjustment_credit', 'adjustment_debit', 'reversal')), delta_available INTEGER NOT NULL, delta_reserved INTEGER NOT NULL, available_after INTEGER NOT NULL, reserved_after INTEGER NOT NULL, description TEXT NOT NULL, ref_type TEXT, ref_id INTEGER, idempotency_key TEXT NOT NULL UNIQUE, actor_telegram_id INTEGER, created_at INTEGER NOT NULL)",
+      "CREATE INDEX idx_wallet_ledger_customer ON wallet_ledger (customer_id, simulated, id)",
+      // A request to add money. It is credited only after the admin verifies it.
+      "CREATE TABLE wallet_deposits (id INTEGER PRIMARY KEY AUTOINCREMENT, customer_id INTEGER NOT NULL, simulated INTEGER NOT NULL CHECK (simulated IN (0, 1)), amount_santim INTEGER NOT NULL CHECK (amount_santim > 0), method TEXT NOT NULL CHECK (method IN ('cbe', 'cbe_birr')), status TEXT NOT NULL CHECK (status IN ('awaiting_receipt', 'under_verification', 'verified', 'rejected', 'expired', 'cancelled')), screenshot_file_id TEXT, screenshot_unique_id TEXT, created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL, submitted_at INTEGER, reviewed_by INTEGER, reviewed_at INTEGER, reject_reason TEXT)",
+      // One open deposit at a time per customer, and one screenshot can't back two deposits.
+      "CREATE UNIQUE INDEX uq_deposit_open ON wallet_deposits (customer_id) WHERE status IN ('awaiting_receipt', 'under_verification')",
+      "CREATE UNIQUE INDEX uq_deposit_screenshot ON wallet_deposits (screenshot_unique_id) WHERE screenshot_unique_id IS NOT NULL",
+    ],
+  },
 ];
 
 // Applies any migrations that have not run yet. Safe to run many times.
